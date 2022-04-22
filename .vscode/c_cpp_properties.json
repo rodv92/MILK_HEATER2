@@ -10,7 +10,12 @@
             "includePath": [
                 "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/include",
                 "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/src",
+                "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/vl6180x-arduino",
                 "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/PID",
+                "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/arduino-display-lcdkeypad",
+                "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/LiquidCrystal/src",
+                "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/spin-timer",
+                "/home/rod/.platformio/packages/framework-arduino-avr/libraries/Wire/src",
                 "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/DallasTemperature",
                 "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/OneWire",
                 "/home/rod/.platformio/packages/framework-arduino-avr/cores/arduino",
@@ -19,7 +24,6 @@
                 "/home/rod/.platformio/packages/framework-arduino-avr/libraries/HID/src",
                 "/home/rod/.platformio/packages/framework-arduino-avr/libraries/SPI/src",
                 "/home/rod/.platformio/packages/framework-arduino-avr/libraries/SoftwareSerial/src",
-                "/home/rod/.platformio/packages/framework-arduino-avr/libraries/Wire/src",
                 "/home/rod/.platformio/packages/tool-unity",
                 ""
             ],
@@ -28,7 +32,12 @@
                 "path": [
                     "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/include",
                     "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/src",
+                    "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/vl6180x-arduino",
                     "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/PID",
+                    "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/arduino-display-lcdkeypad",
+                    "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/LiquidCrystal/src",
+                    "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/spin-timer",
+                    "/home/rod/.platformio/packages/framework-arduino-avr/libraries/Wire/src",
                     "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/DallasTemperature",
                     "/home/rod/Documents/PlatformIO/Projects/MILK_HEATER2/lib/OneWire",
                     "/home/rod/.platformio/packages/framework-arduino-avr/cores/arduino",
@@ -37,7 +46,6 @@
                     "/home/rod/.platformio/packages/framework-arduino-avr/libraries/HID/src",
                     "/home/rod/.platformio/packages/framework-arduino-avr/libraries/SPI/src",
                     "/home/rod/.platformio/packages/framework-arduino-avr/libraries/SoftwareSerial/src",
-                    "/home/rod/.platformio/packages/framework-arduino-avr/libraries/Wire/src",
                     "/home/rod/.platformio/packages/tool-unity",
                     ""
                 ]
