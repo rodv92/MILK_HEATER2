@@ -72,7 +72,13 @@ bool PID::Compute()
       double dInput = (input - lastInput);
       if (error*lastError <= 0) {outputSum = 0; Serial.println("INTEG RESET");}
       else {outputSum = iweight*outputSum + (ki * error);}
-
+      Serial.println("Ki");
+      Serial.println(ki),
+      Serial.println("ERROR");
+      Serial.println(error);
+      Serial.println("OSUM");
+      Serial.println(outputSum);
+      
 
       /*Add Proportional on Measurement, if P_ON_M is specified*/
       if(!pOnE) outputSum-= kp * dInput;
@@ -94,7 +100,7 @@ bool PID::Compute()
       
 
       /*Compute Rest of PID Output*/
-      output += outputSum - kd * dInput;
+      output += outputSum + kd * dInput;
 
 
 	    if(output > outMax) output = outMax;
@@ -209,8 +215,12 @@ void PID::Initialize()
    outputSum = *myOutput;
    lastInput = *myInput;
    lastError = 0;
+   Serial.println("PIDINIT");
+   Serial.println(outputSum);
    if(outputSum > outMax) outputSum = outMax;
    else if(outputSum < outMin) outputSum = outMin;
+   Serial.println(outputSum);
+   
 }
 
 /* SetControllerDirection(...)*************************************************

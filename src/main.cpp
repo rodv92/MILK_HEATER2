@@ -27,37 +27,60 @@ bool self_test = false;
 bool debug = true;
 bool program_init = false;
 bool program_ended = false;
-bool program_paused = false;
+//bool program_paused = false;
 bool stirr_only = false;
 bool stirr_disabled = false;
 uint8_t program_step = 0;
 
 String msg_id[3] = {"SELECT_PROGRAM","PROGRAM_END","ADD_RENNET"};
 
-const PROGMEM int16_t progdata[2][12] = 
+const PROGMEM int16_t progdata[4][16] = 
 {
-  // if program is an array of 0 values then it will only perform stirring without end.
-  {0,0,0,0,0,0,0,0,0,0,0,0} ,
+  // if program is an array of 0 values with 1 for stirring then it will only perform stirring without end.
+  {0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0} ,
 
-  //format_of_array {target_temp,rise_time,stir,message_id,target_temp2,rise_time2,stir2...}
+  //format_of_array {target_temp,rise_time,stir,pause_after,target_temp2,rise_time2,stir2, etc...}
   // if target_temperature = -1 then disable heater
-  /*
-  {32,900,0,
-  32,2400,0,
-  32,2400,1,
-  49,1800,1}
-  */
- {
-  49,300,1,
-  49,1800,1,
-  20,2400,1,
-  20,2400,1
-  }
   
+  // program fromage suisse type emmental
+ 
+ 
+ /*
+  {32,1200,0,0,
+  32,2400,0,1,
+  32,2400,1,0,
+  49,1800,1,0}
+ */
+
+//programme mantien temperature
+ {34,7200,0,1,
+  0,0,0,0,
+  0,0,0,0,
+  0,0,0,0}
+ ,
+
+ // programme pasteurisation
+ {72,1200,0,0,
+  72,180,1,1,
+  32,2400,1,0,
+  32,2400,1,0}
+ ,
+ /*
+  {35,700,0,0,
+  35,1200,1,1,
+  32,1200,1,0,
+  32,1200,1,0}
+*/
+  
+  {53,900,0,0,
+  53,3600,0,1,
+  40,2400,1,0,
+  49,1800,1,0}
+ 
 };
-uint16_t current_program_data[3];
+uint16_t current_program_data[4];
 //Define Variables we'll be connecting to
-double Setpoint, Input, Output;
+double Setpoint, Input, Output = 0.0;
 
 
 // Units S.I
@@ -115,14 +138,16 @@ double crosstalk;
 // Divide energy by required rise time to get power. 1 output = 1.2W
 // steady state gain : 300 for 5.7l is quite ok
 
-double Kp=300, Ki=20, Kd=-4000;
+double Kp=300, Ki=20, Kd=-50000;
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, P_ON_E, REVERSE);
 
 int WindowSize = 1000;
-uint8_t Duty = 0;
+int WindowSizeRise = 20000;
+uint8_t EffectiveDuty = 0;
 uint8_t Duty2 = 0;
 
 unsigned long windowStartTime;
+unsigned long windowStartTimeRise;
 unsigned long programStartTime;
 unsigned long programElapsedTime;
 //bool program_started; // program is running
@@ -135,6 +160,7 @@ private:
   uint8_t m_value; // program number
 public:
   bool program_started; // program status
+  bool program_paused;
   bool input_qty;
   uint8_t liquid_qty_decilitres;
   uint8_t program_number; // public program number
@@ -142,6 +168,7 @@ public:
   : m_lcdKeypad(lcdKeypad)
   , m_value(0)
   , program_number(1)
+  , program_paused(false)
   , program_started(false)
   , liquid_qty_decilitres(50)
   , input_qty(false)
@@ -161,11 +188,11 @@ public:
           liquid_qty_decilitres++;
           liquid_qty_decilitres = constrain(liquid_qty_decilitres,50,150);
         }
-        if (program_started){ digitalWrite(MOTOR_RELAY_PIN,LOW); return;}
+        if ((program_started) && !input_qty) { digitalWrite(MOTOR_RELAY_PIN,LOW); return;}
         else
         {
           m_value++;
-          m_value = constrain(m_value,0,4);
+          m_value = constrain(m_value,0,3);
           program_number = m_value;
         }
         
@@ -179,11 +206,11 @@ public:
           liquid_qty_decilitres--;
           liquid_qty_decilitres = constrain(liquid_qty_decilitres,50,150);
         }
-        if (program_started){ digitalWrite(MOTOR_RELAY_PIN,HIGH); return;}
+        if ((program_started) && !input_qty) { digitalWrite(MOTOR_RELAY_PIN,HIGH); return;}
         else 
         {
           m_value--;
-          m_value = constrain(m_value,0,4);
+          m_value = constrain(m_value,0,3);
           program_number = m_value;
         }
       }
@@ -209,6 +236,7 @@ public:
         if (debug) {Serial.println("SELECT");}
         if(input_qty) {input_qty = false;}
         if(!program_started) {program_started = true;}
+        if(program_paused) {program_paused = false;}
       }
 
       m_lcdKeypad->setCursor(0, 1);            // position the cursor at beginning of the second line
@@ -233,7 +261,34 @@ public:
 
 MyLcdKeypadAdapter* myLcdAdapter;
 
+void PrintStatus(uint8_t dt)
+{
+  myLcdKeypad->clear();
+  myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
+  myLcdKeypad->print("CT:");   // print a Value label on the first line of the display
+  myLcdKeypad->setCursor(3, 0);   // position the cursor at char 7 of the first line
+  myLcdKeypad->print(Input);   // print a Value label on the first line of the display
+  myLcdKeypad->setCursor(9, 0);   // position the cursor at char 7 of the first line
+  myLcdKeypad->print("TT:");   // print a Value label on the first line of the display
+  myLcdKeypad->setCursor(13, 0);   // position the cursor at char 7 of the first line
+  myLcdKeypad->print(Setpoint);   // print a Value label on the first line of the display
+  myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
+  myLcdKeypad->print("SP:");   // print a Value label on the first line of the display
+  myLcdKeypad->setCursor(3, 1);   // position the cursor at beginning of the first line
+  myLcdKeypad->print(program_step);   // print a Value label on the first line of the display
+  
+  myLcdKeypad->setCursor(5, 1);   // position the cursor at beginning of the first line
+  myLcdKeypad->print("ST:");   // print a Value label on the first line of the display
+  
+  myLcdKeypad->setCursor(8, 1);   // position the cursor at beginning of the first line
+  myLcdKeypad->print(current_program_data[2]);
 
+  myLcdKeypad->setCursor(9, 1);   // position the cursor at beginning of the first line
+  myLcdKeypad->print("DU:");   // print a Value label on the first line of the display
+  
+  myLcdKeypad->setCursor(12, 1);   // position the cursor at beginning of the first line
+  myLcdKeypad->print(dt);
+}
 void setup()
 {
   pinMode(MOTOR_RELAY_PIN,OUTPUT);
@@ -414,7 +469,7 @@ void setup()
   myLcdKeypad->print(Input);   // print a Value label on the first line of the display
   delay(2000); 
 
-
+/*
   avgdist = 0.0;
   avgret = 0.0;
   
@@ -449,7 +504,7 @@ void setup()
     myLcdKeypad->setCursor(8, 0);   // position the cursor at beginning of the first line
     myLcdKeypad->print(avgdist);   // print a Value label on the first line of the display
     delay(2000);  
-  
+  */
     myLcdKeypad->clear();
     myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
     myLcdKeypad->print("SELECT PROGRAM:");   // print a Value label on the first line of the display
@@ -457,6 +512,7 @@ void setup()
   
   
   windowStartTime = millis();
+  windowStartTimeRise = millis();
 
  
 
@@ -484,11 +540,15 @@ void loop() {
   }
   // program_started = true means the user has selected a program.
   // program_init = false means the selected program needs to be initialized
+    
+
+  /*
   while(program_paused)
   {
     scheduleTimers();
+    
   }
-
+  */
 
   if(!program_init) 
   {
@@ -498,9 +558,9 @@ void loop() {
     Serial.println("PROGRAM STEP:");
     Serial.println(program_step);
 
-    for(k=0;k<3;k++)
+    for(k=0;k<4;k++)
     {
-      current_program_data[k] = pgm_read_word(&(progdata[myLcdAdapter->program_number][k+program_step*3]));
+      current_program_data[k] = pgm_read_word(&(progdata[myLcdAdapter->program_number][k+program_step*4]));
       Serial.println("READ PROGRAM DATA");
       Serial.println(current_program_data[k]);
     }
@@ -528,7 +588,10 @@ void loop() {
     
     
     */
-    if (program_step == 0)
+
+    if (current_program_data[0] == 0) { stirr_only = true;}
+    
+    if ((program_step == 0) && !stirr_only)
     {
 
       myLcdAdapter->input_qty = true;
@@ -555,12 +618,13 @@ void loop() {
     Serial.println("kp=");
     Serial.println(Kp);
 
-    if (current_program_data[0] == 0) { stirr_only = true;}
     
     if(!stirr_only)
     {
       Setpoint = float(current_program_data[0]); // Degrees Celsius
-      temperature_rise_time = float(current_program_data[1]);
+      
+      if ((Setpoint - Input) < 2.0) { temperature_rise_time = 600; } // We don't bother having a controlled rise if it is already close to target, so we can jump to closed loop already}
+      else { temperature_rise_time = float(current_program_data[1]);}
       stirr_disabled = !bool(current_program_data[2]);
       
       Serial.println("SETPOINT");
@@ -582,7 +646,10 @@ void loop() {
       vertical_surface_U_value = 1.0/(1.0/liquid_convective_coefficient_vertical + vessel_thickness/vessel_thermal_conductivity + 1.0/air_convective_coefficient_vertical);
       horizontal_surface_U_value = 1.0/(1.0/liquid_convective_coefficient_horizontal + milk_thickness/milk_thermal_conductivity + 1.0/air_convective_coefficient_horizontal);
       // OPEN LOOP CONTROL when rise time is specified and more than 2 degrees from target
-      heat_transfer_rate_vertical =  vertical_surface_U_value*vessel_area*(Input - ambient_temperature);
+      
+      // added fill factor and its influence on exposed internal vertical steel surface to air.
+      heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (15.0 - liquid_qty_litres)/15.0)*(Input - ambient_temperature);
+      
       heat_transfer_rate_horizontal = horizontal_surface_U_value*(PI*vessel_radius*vessel_radius)*(Input - ambient_temperature);
       total_heat_loss = heat_transfer_rate_vertical + heat_transfer_rate_horizontal;
 
@@ -594,13 +661,16 @@ void loop() {
       // when duty is 100 percent = 1200W
       // Duty = P / 12 (12W per 1% duty cycle), assuming the hot plate is 1200W rated nominal power
       // steady state gain : 300 for 5.7l is quite ok
-
       total_energy_required = liquid_qty_litres*milk_density*milk_heat_capacity*(Setpoint - Input);
-      power_required = (total_energy_required/temperature_rise_time) + total_heat_loss;
+      power_required = 2.0*((total_energy_required/temperature_rise_time) + total_heat_loss);
+      // 1.8 correction factor.
+      // hot plate is 1500W max power
+      power_required = constrain(power_required,0.0,1500.0);
+      temperature_rise_time = float(current_program_data[1]); // restoring the value to get real program step time (maybe tweak was applied in case delta_t < 2.0)
       Serial.print("POWER_REQUIRED:");
       Serial.println(power_required);
-      Kp = constrain(fabs(power_required)/12.0,0.0,100.0)*WindowSize/100.0;
-      Duty2 = int(constrain(power_required/12.0,0.0,100.0));
+      Kp = constrain(fabs(power_required)/15.0,0.0,100.0)*WindowSize/100.0;
+      Duty2 = int(constrain(power_required/15.0,0.0,100.0));
       Serial.print("Duty2:");
       Serial.println(Duty2);
 
@@ -620,9 +690,7 @@ void loop() {
     }
     else 
     {
-      myLcdKeypad->clear();
-      myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the second line
-      myLcdKeypad->print("STIRRING ONLY");   // print a Value label on the first line of the display
+      PrintStatus(0);  // print a Value label on the first line of the display
     }
   // start stirring;
   
@@ -643,6 +711,7 @@ void loop() {
     programStartTime = millis();
   }
 
+  
   sensors.requestTemperatures(); // Send the command to get temperatures
 
   Input = float(sensors.getTempCByIndex(0));
@@ -650,48 +719,61 @@ void loop() {
   if (!stirr_only) 
   {
 
-    if (Setpoint - Input < 2.0) 
+    if (fabs(Setpoint - Input) < 3.0) 
     {
+      heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (15.0 - liquid_qty_litres)/15.0)*(Input - ambient_temperature);
+      heat_transfer_rate_horizontal = horizontal_surface_U_value*(PI*vessel_radius*vessel_radius)*(Input - ambient_temperature);
+      total_heat_loss = heat_transfer_rate_vertical + heat_transfer_rate_horizontal;
+
+      total_energy_required = liquid_qty_litres*milk_density*milk_heat_capacity*(Setpoint - Input);
+      power_required = 1.85*(total_energy_required/(temperature_rise_time - programElapsedTime) + total_heat_loss);
+      // 1.8 correction factor.
+      // hot plate is 1500W max power
+      power_required = constrain(power_required,0.0,1500.0);
+      
+      temperature_rise_time = float(current_program_data[1]); // restoring the value to get real program step time (maybe tweak was applied in case delta_t < 2.0)
+      //Serial.print("POWER_REQUIRED:");
+      //Serial.println(power_required);
+      Kp = constrain(fabs(power_required)/15.0,0.0,100.0)*WindowSize/100.0;
+      Duty2 = int(constrain(power_required/15.0,0.0,100.0));
+
+      myPID.SetOutputLimits(WindowSize*(1.0 - 2.2*Duty2/100.0),WindowSize); // 1.6 boost factor
+      myPID.SetTunings(Kp,Ki,Kd);
       myPID.SetMode(AUTOMATIC);
+
+
       myPID.Compute();
-      Duty = int(100.0*(1.0 - float(Output)/float(WindowSize)));
+      //Duty = int(100.0*(1.0 - float(Output)/float(WindowSize)));
     }
-    else
+    else if(Input - Setpoint > 3.0) // disable heating completely
     {
       myPID.SetMode(MANUAL);
-      Output = int(float(WindowSize)*float(100.0 - Duty2)/100.0);
+      Output = WindowSize;
     }
-    
+    else // controlled rise time mode (open loop)
+    {
+      myPID.SetMode(MANUAL);
+      Output = int(float(WindowSize)*float(100.0 - Duty2)/100.0);  
+    }
 
+    EffectiveDuty = int(100.0*float((WindowSize - Output)/WindowSize));
+    
+    if (millis() - windowStartTime > WindowSizeRise)
+    { //time to get temperature rise rate
+    //RiseRate = Input - PreviousInput;
+    //PreviousInput = Input;
+    }
     /************************************************
      * turn the output pin on/off based on pid output
      ************************************************/
     if (millis() - windowStartTime > WindowSize)
     { //time to shift the Relay Window
 
-
-      myLcdKeypad->clear();
-      myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-      myLcdKeypad->print("CT:");   // print a Value label on the first line of the display
-      myLcdKeypad->setCursor(3, 0);   // position the cursor at char 7 of the first line
-      myLcdKeypad->print(Input);   // print a Value label on the first line of the display
-      myLcdKeypad->setCursor(9, 0);   // position the cursor at char 7 of the first line
-      myLcdKeypad->print("TT:");   // print a Value label on the first line of the display
-      myLcdKeypad->setCursor(13, 0);   // position the cursor at char 7 of the first line
-      myLcdKeypad->print(Setpoint);   // print a Value label on the first line of the display
-      myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
-      myLcdKeypad->print("SP:");   // print a Value label on the first line of the display
-      myLcdKeypad->setCursor(3, 1);   // position the cursor at beginning of the first line
-      myLcdKeypad->print(program_step);   // print a Value label on the first line of the display
-      
-      myLcdKeypad->setCursor(5, 1);   // position the cursor at beginning of the first line
-      myLcdKeypad->print("ST:");   // print a Value label on the first line of the display
-      
-      myLcdKeypad->setCursor(8, 1);   // position the cursor at beginning of the first line
-      myLcdKeypad->print(current_program_data[2]);   // print a Value label on the first line of the display
+      PrintStatus(EffectiveDuty);
+      // print a Value label on the first line of the display
       
       programElapsedTime = (millis() - programStartTime)/1000;
-      Serial.println("PROGRAM_STEP_ELAPSED_TIME");
+      Serial.print(" PROGRAM_STEP_ELAPSED_TIME:");
       Serial.println(programElapsedTime);
 
       if (programElapsedTime > temperature_rise_time)
@@ -703,6 +785,23 @@ void loop() {
         program_init = false;
         Serial.print("NEXT_STEP:");
         Serial.println(program_step);
+        if (current_program_data[3])
+        {
+          myLcdAdapter->program_paused = true;
+          myLcdKeypad->clear();
+          myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
+          myLcdKeypad->print("PROGRAM PAUSED!");
+          myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
+          myLcdKeypad->print("SELECT TO RESUME");
+  
+
+          while(myLcdAdapter->program_paused)
+          {
+            scheduleTimers();
+          }
+
+        }
+
         if (program_step >= 4) {program_ended = true; return;}
       }
       
@@ -714,10 +813,8 @@ void loop() {
       Serial.print(Input);
       Serial.print(" TT:");
       Serial.print(Setpoint);
-      Serial.print(" D:");
-      Serial.print(Duty);
       Serial.print(" D2:");
-      Serial.print(Duty2);
+      Serial.print(EffectiveDuty);
       Serial.print(" MODE:");
       Serial.println(myPID.GetMode());
       
@@ -741,8 +838,12 @@ void loop() {
     {
       digitalWrite(HEATER_SSR_PIN, LOW);
       //Serial.println("NO_HEAT");
-    };
-    
-  } //end if(!stirronly)
+    }
+  } // end if(!stirr_only)
+  else
+  {
+    delay(1000);
+    PrintStatus(0);  // print a Value label on the first line of the display
+  } //end else ...(!stirronly)
 
 }
