@@ -78,13 +78,30 @@ bool PID::Compute()
       Serial.println(error);
       Serial.println("OSUM");
       Serial.println(outputSum);
+         Serial.print("OUTMAX:");
+         Serial.println(outMax);
+     
+         Serial.print("OUTMIN:");
+         Serial.println(outMin);
       
 
       /*Add Proportional on Measurement, if P_ON_M is specified*/
       if(!pOnE) outputSum-= kp * dInput;
 
-      if(outputSum > outMax) outputSum= outMax;
-      else if(outputSum < outMin) outputSum= outMin;
+      if(outputSum > outMax) 
+      {
+         outputSum= outMax;
+         Serial.print("OUTMAXS:");
+         Serial.println(outMax);
+      
+      }
+      else if(outputSum < outMin)
+      {
+         outputSum= outMin;
+         Serial.print("OUTMINS:");
+         Serial.println(outMin);
+      
+      };
 
       /*Add Proportional on Error, if P_ON_E is specified*/
 	   double output;
@@ -103,9 +120,22 @@ bool PID::Compute()
       output += outputSum + kd * dInput;
 
 
-	    if(output > outMax) output = outMax;
-      else if(output < outMin) output = outMin;
+	    if(output > outMax) 
+       {
+          output = outMax;
 
+         Serial.print("OUTMAXF:");
+         Serial.println(outMax);
+      
+       }
+      else if(output < outMin) 
+      {
+         output = outMin;
+
+         Serial.print("OUTMINF:");
+         Serial.println(outMin);
+      
+      }
 	    *myOutput = output;
 
       /*Remember some variables for next time*/
@@ -177,7 +207,7 @@ void PID::SetSampleTime(int NewSampleTime)
 void PID::SetOutputLimits(double Min, double Max)
 {
 
-   if(Min >= Max) return;
+   if(Min > Max) return;
    outMin = Min;
    outMax = Max;
 
