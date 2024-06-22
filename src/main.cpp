@@ -1,3 +1,5 @@
+#define VERSION "1.0.0.21"
+
 #include <Arduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -22,6 +24,7 @@ VL6180X range_sensor;
 
 #define MOTOR_RELAY_PIN 3
 #define HEATER_SSR_PIN 10
+#define BUZZER_PIN 11
 
 bool self_test = false;
 bool debug = true;
@@ -35,17 +38,24 @@ uint8_t program_step = 0;
 
 String msg_id[3] = {"SELECT_PROGRAM","PROGRAM_END","ADD_RENNET"};
 
+enum state { initialization, start_program, end_step, end_program };
+
 const PROGMEM int16_t progdata[4][16] = 
 {
-  // if program is an array of 0 values with 1 for stirring then it will only perform stirring without end.
-  {0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0} ,
+  
 
   //format_of_array {target_temp,rise_time,stir,pause_after,target_temp2,rise_time2,stir2, etc...}
   // if target_temperature = -1 then disable heater
   
+  // stirr only program :
+  // if program is an array of 0 values with 1 for stirring then it will only perform stirring without end.
+  {0,0,1,0,
+  0,0,1,0,
+  0,0,1,0,
+  0,0,1,0} 
+  ,
+
   // program fromage suisse type emmental
- 
- 
  /*
   {32,1200,0,0,
   32,2400,0,1,
@@ -59,10 +69,9 @@ const PROGMEM int16_t progdata[4][16] =
   0,0,0,0,
   0,0,0,0,
   0,0,0,0}
+ //fin programme calibration
  ,
-
-
-
+ 
 //programme mantien temperature
  /*
  {34,7200,0,1,
@@ -71,32 +80,22 @@ const PROGMEM int16_t progdata[4][16] =
   0,0,0,0}
  ,
 */
+
  // programme pasteurisation
  {72,1200,0,0,
   72,180,1,1,
   32,2400,1,0,
   32,2400,1,0}
- ,
- /*
-  {35,700,0,0,
-  35,1200,1,1,
-  32,1200,1,0,
-  32,1200,1,0}
-*/
-  // programme parmesan
-  /*
-  {32,1200,0,0,
-  32,3000,0,1,
-  37,1200,1,0,
-  51,1600,1,0}
- */
- // fin programme parmesan
+ // fin programme pasteurisation
 
- {32,800,1,0,
+ ,
+ 
+ // programme parmesan
+ {32,1200,1,0,
   32,2400,1,1,
   37,1200,1,0,
   51,1600,1,0}
- 
+ // fin programme parmesan
 
 };
 int16_t current_program_data[4];
@@ -107,7 +106,7 @@ double Setpoint, Input, Output = 0.0;
 // Units S.I
 double liquid_qty_litres;
 double heat_transfer_rate;
-double ambient_temperature = 20.0;
+double ambient_temperature;
 
 const double vessel_radius = 0.1375;
 const double vessel_height = 0.245;
@@ -163,16 +162,16 @@ double crosstalk;
 double Kp=300, Ki=20, Kd=-50000;
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, P_ON_E, REVERSE);
 
-int WindowSize = 1000;
-int WindowSizeRise = 20000;
+uint16_t WindowSize = 1000;
+uint16_t WindowSizeRise = 20000;
 float EffectiveDuty = 0.0;
 float Duty2 = 0.0;
 
-unsigned long windowStartTime;
-unsigned long windowStartTimeRise;
-unsigned long programStartTime;
-unsigned long programElapsedTime;
-unsigned long programSwitchPoint;
+uint32_t windowStartTime;
+uint32_t windowStartTimeRise;
+uint32_t programStartTime;
+uint32_t programElapsedTime;
+uint32_t programSwitchPoint;
 
 
 //bool program_started; // program is running
@@ -184,12 +183,13 @@ private:
   LcdKeypad* m_lcdKeypad;
   uint8_t m_value; // program number
 public:
-  bool program_started; // program status
+  uint8_t program_number; // public program number
   bool program_paused;
+  bool program_started; // program status
+  uint8_t liquid_qty_decilitres;
   bool input_qty;
   bool input_ambtemp;
-  uint8_t liquid_qty_decilitres;
-  uint8_t program_number; // public program number
+ 
   MyLcdKeypadAdapter(LcdKeypad* lcdKeypad)
   : m_lcdKeypad(lcdKeypad)
   , m_value(0)
@@ -198,7 +198,7 @@ public:
   , program_started(false)
   , liquid_qty_decilitres(50)
   , input_qty(false)
-  , input_ambtemp(false)
+  , input_ambtemp(true)
   { }
 
   // Specific handleKeyChanged() method implementation - define your actions here
@@ -208,21 +208,21 @@ public:
     {
       if (LcdKeypad::UP_KEY == newKey)
       {
-        if (self_test) {Serial.println("UP"); return;}
-        if (debug) {Serial.println("UP");}
+        if (self_test) {Serial.println(F("UP")); return;}
+        if (debug) {Serial.println(F("UP"));}
         if (input_qty) 
         {
           liquid_qty_decilitres++;
           liquid_qty_decilitres = constrain(liquid_qty_decilitres,50,150);
         }
-        /*
+        
         if (input_ambtemp) 
         {
-          ambient_temperature += 1.0;
+          ambient_temperature += 1.f;
           ambient_temperature = constrain(ambient_temperature,0.0,40.0);
         }
-        */
-        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,LOW); Serial.println("MOTOR_ENABLED"); return;}
+        
+        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,LOW); Serial.println(F("MOTOR_ENABLED")); return;}
         else
         {
           m_value++;
@@ -233,21 +233,21 @@ public:
       }
       else if (LcdKeypad::DOWN_KEY == newKey)
       {
-        if (self_test) {Serial.println("DOWN"); return;}
-        if (debug) {Serial.println("DOWN");}
+        if (self_test) {Serial.println(F("DOWN")); return;}
+        if (debug) {Serial.println(F("DOWN"));}
         if (input_qty) 
         {
           liquid_qty_decilitres--;
           liquid_qty_decilitres = constrain(liquid_qty_decilitres,50,150);
         }
-        /*
+        
         if (input_ambtemp) 
         {
-          ambient_temperature -= 1.0;
+          ambient_temperature -= 1.f;
           ambient_temperature = constrain(ambient_temperature,0.0,40.0);
         }
-        */
-        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,HIGH);Serial.println("MOTOR_DISABLED"); return;}
+        
+        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,HIGH);Serial.println(F("MOTOR_DISABLED")); return;}
         else 
         {
           m_value--;
@@ -257,15 +257,15 @@ public:
       }
       else if (LcdKeypad::LEFT_KEY == newKey)
       {
-        if (self_test) {Serial.println("LEFT"); return;}
-        if (debug) {Serial.println("LEFT");}
+        if (self_test) {Serial.println(F("LEFT")); return;}
+        if (debug) {Serial.println(F("LEFT"));}
         if (program_started) { program_paused = !program_paused;}
   
       }
       else if (LcdKeypad::RIGHT_KEY == newKey)
       {
-        if (self_test) {Serial.println("RIGHT"); return;}
-        if (debug) {Serial.println("RIGHT");}
+        if (self_test) {Serial.println(F("RIGHT")); return;}
+        if (debug) {Serial.println(F("RIGHT"));}
         if (program_started) { program_step++;}
         
       }
@@ -273,11 +273,25 @@ public:
      
       else if (LcdKeypad::SELECT_KEY == newKey)
       {
-        if (self_test) {Serial.println("SELECT"); return;}
-        if (debug) {Serial.println("SELECT");}
-        if(input_qty) {input_qty = false;}
-        if(input_ambtemp) {input_ambtemp = false;}
-        if(!program_started) {program_started = true;}
+        if (self_test) {Serial.println(F("SELECT")); return;}
+        if (debug) {Serial.println(F("SELECT"));}
+        if(input_qty) 
+        {
+          Serial.println(F("C1"));
+          input_qty = false;
+          
+        }
+        if(!program_started && !input_ambtemp && !input_qty) {
+          Serial.println(F("C3"));
+          program_started = true;
+          input_qty = true;
+          }
+        if(input_ambtemp) 
+        {
+          input_ambtemp = false; program_started = false;
+          Serial.println(F("C2"));
+        }
+
         if(program_paused) {program_paused = false;}
       }
 
@@ -286,19 +300,19 @@ public:
       if(input_qty) 
       {
         m_lcdKeypad->print(liquid_qty_decilitres,DEC);             // print the value on the second line of the display
-        m_lcdKeypad->print("                ");  // wipe out characters behind the printed value
+        m_lcdKeypad->print(F("                "));  // wipe out characters behind the printed value
       }
-      /*
+      
       if(input_ambtemp) 
       {
-        m_lcdKeypad->print(int(ambient_temperature),DEC);             // print the value on the second line of the display
-        m_lcdKeypad->print("                ");  // wipe out characters behind the printed value
+        m_lcdKeypad->print(int(floor(ambient_temperature + 0.5f)),DEC);             // print the value on the second line of the display
+        m_lcdKeypad->print(F("                "));  // wipe out characters behind the printed value
       }
-      */
+      
       if(!program_started)
       {
         m_lcdKeypad->print(m_value,DEC);             // print the value on the second line of the display
-        m_lcdKeypad->print("                ");  // wipe out characters behind the printed value
+        m_lcdKeypad->print(F("                "));  // wipe out characters behind the printed value
       }
       
       // RGB colored backlight: set according to the current value
@@ -310,40 +324,135 @@ public:
 
 MyLcdKeypadAdapter* myLcdAdapter;
 
+long readVcc() {
+ 
+  long result;
+  // Read 1.1V reference against AVcc
+  ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+  delay(2); // Wait for Vref to settle
+  ADCSRA |= _BV(ADSC); // Convert
+  while (bit_is_set(ADCSRA,ADSC));
+  result = ADCL;
+  result |= ADCH<<8;
+  result = 1126400L / result; // Back-calculate AVcc in mV
+  return result;
+}
+
 void PrintStatus(float dt)
 {
   myLcdKeypad->clear();
   myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("CT:");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("CT:"));   // print a Value label on the first line of the display
   myLcdKeypad->setCursor(3, 0);   // position the cursor at char 7 of the first line
   myLcdKeypad->print(Input);   // print a Value label on the first line of the display
   myLcdKeypad->setCursor(9, 0);   // position the cursor at char 7 of the first line
-  myLcdKeypad->print("TT:");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("TT:"));   // print a Value label on the first line of the display
   myLcdKeypad->setCursor(13, 0);   // position the cursor at char 7 of the first line
   myLcdKeypad->print(Setpoint);   // print a Value label on the first line of the display
   myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("SP:");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("SP:"));   // print a Value label on the first line of the display
   myLcdKeypad->setCursor(3, 1);   // position the cursor at beginning of the first line
   myLcdKeypad->print(program_step);   // print a Value label on the first line of the display
   
   myLcdKeypad->setCursor(5, 1);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("ST:");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("ST:"));   // print a Value label on the first line of the display
   
   myLcdKeypad->setCursor(8, 1);   // position the cursor at beginning of the first line
   myLcdKeypad->print(current_program_data[2]);
 
   myLcdKeypad->setCursor(9, 1);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("DU:");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("DU:"));   // print a Value label on the first line of the display
   
   myLcdKeypad->setCursor(12, 1);   // position the cursor at beginning of the first line
   myLcdKeypad->print(dt,DEC);
 }
+
+
+void buzz(state s)
+{
+
+  uint16_t freq = 880;
+  uint16_t half_period_us = int(1.e6f/(2*freq));
+
+  switch(s)
+  {
+
+    case initialization:
+
+      for(uint16_t i=0; i < freq/10; i++)
+      {
+        //Serial.println("buzz");
+        digitalWrite(BUZZER_PIN,LOW);
+        delayMicroseconds(half_period_us);
+        digitalWrite(BUZZER_PIN,HIGH);
+        delayMicroseconds(half_period_us);
+      }
+
+    case start_program:
+
+      for(uint16_t i=0; i < freq/5; i++)
+      {
+        //Serial.println("buzz");
+        digitalWrite(BUZZER_PIN,LOW);
+        delayMicroseconds(half_period_us);
+        digitalWrite(BUZZER_PIN,HIGH);
+        delayMicroseconds(half_period_us);
+      }
+
+     
+      break;
+
+    case end_step:
+
+
+      for(uint16_t i=0; i < freq*5; i++)
+      {
+        digitalWrite(BUZZER_PIN,LOW);
+        delayMicroseconds(half_period_us);
+        digitalWrite(BUZZER_PIN,HIGH);
+        delayMicroseconds(half_period_us);
+      }
+
+
+      break;
+
+    case end_program:
+
+      for(uint8_t j=0; j < 3; j++)
+      {
+      
+        for(uint16_t i=0; i < freq/2; i++)
+        {
+          digitalWrite(BUZZER_PIN,LOW);
+          delayMicroseconds(half_period_us);
+          digitalWrite(BUZZER_PIN,HIGH);
+          delayMicroseconds(half_period_us);
+        }
+      
+        if(j==2) {break;}
+        delay(500);
+
+      }
+      break;
+
+  }
+}
+
+
+
 void setup()
 {
   pinMode(MOTOR_RELAY_PIN,OUTPUT);
   digitalWrite(MOTOR_RELAY_PIN,HIGH);
   pinMode(HEATER_SSR_PIN, OUTPUT);
+  pinMode(BUZZER_PIN,OUTPUT);
+  digitalWrite(BUZZER_PIN,HIGH);
 
+  Serial.begin(9600);
+
+  Serial.println(F("BUZZ INIT"));
+  buzz(initialization);
+  Serial.println(readVcc());
 
   myLcdKeypad = new LcdKeypad();  // instantiate an object of the LcdKeypad class, using default parameters
   myLcdAdapter = new MyLcdKeypadAdapter(myLcdKeypad);
@@ -351,7 +460,7 @@ void setup()
   myLcdKeypad->attachAdapter(myLcdAdapter);
   
   myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("INIT");   // print a Value label on the first line of the display
+  myLcdKeypad->print(VERSION);   // print a Value label on the first line of the display
   delay(2000);
 
   range_sensor.init();
@@ -369,60 +478,59 @@ void setup()
 
   myLcdKeypad->clear();
   myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("RANGE_INIT");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("RANGE_INIT"));   // print a Value label on the first line of the display
   delay(2000);
-  Serial.begin(9600);
 
   
 
-  Serial.println("START");
+  Serial.println(F("START"));
   
   if(self_test)
   {
-    Serial.println("SELF_TEST");
-    Serial.print("TEMPERATURE_READ_TEST:");
+    Serial.println(F("SELF_TEST"));
+    Serial.print(F("TEMPERATURE_READ_TEST:"));
     sensors.requestTemperatures(); // Send the command to get temperatures
     Input = float(sensors.getTempCByIndex(0));
     Serial.println(Input);
-    Serial.print("RANGE_READ_TEST:");
+    Serial.print(F("RANGE_READ_TEST:"));
     //range_sensor.setScaling(1);
 
     
-      Serial.print("(Scaling = ");
+      Serial.print(F("(Scaling = "));
       Serial.print(range_sensor.getScaling());
-      Serial.println("x) ");
+      Serial.println(F("x "));
 
-    Serial.print("CONV TIME:");
+    Serial.print(F("CONV TIME:"));
     Serial.println(range_sensor.readReg(0x01C));
     range_sensor.writeReg(0x01C,32);
    
-    Serial.print("SYSRANGE__RANGE_CHECK_ENABLES_default_16:");
+    Serial.print(F("SYSRANGE__RANGE_CHECK_ENABLES_default_16:"));
     Serial.println(range_sensor.readReg(0x02D));
     
     range_sensor.writeReg(0x02D,19);
-    Serial.print("SYSRANGE__RANGE_CHECK_ENABLES_default_16:");
+    Serial.print(F("SYSRANGE__RANGE_CHECK_ENABLES_default_16:"));
     Serial.println(range_sensor.readReg(0x02D));
 
-     Serial.print("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:");
+     Serial.print(F("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:"));
     Serial.println(range_sensor.readReg(0x025));
     range_sensor.writeReg(0x025,0);
-    Serial.print("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:");
+    Serial.print(F("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:"));
     Serial.println(range_sensor.readReg(0x025));
     
 
-    Serial.print("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:");
+    Serial.print(F("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:"));
     Serial.println(range_sensor.readReg16Bit(0x026));
     range_sensor.writeReg16Bit(0x026,0);
-    Serial.print("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:");
+    Serial.print(F("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:"));
     Serial.println(range_sensor.readReg16Bit(0x026));
     
 
     
     // crosstalk 5
-    Serial.print("CONV TIME:");
+    Serial.print(F("CONV TIME:"));
     Serial.println(range_sensor.readReg(0x01C));
     
-    Serial.print("CROSSTALK COMP:");
+    Serial.print(F("CROSSTALK COMP:"));
     Serial.println(range_sensor.readReg16Bit(0x01E));
     
     //range_sensor.writeReg(0x01E,0x00);
@@ -430,13 +538,13 @@ void setup()
     
   
     range_sensor.writeReg16Bit(0x01E,130);
-    Serial.print("CROSSTALK COMP:");
+    Serial.print(F("CROSSTALK COMP:"));
     Serial.println(range_sensor.readReg16Bit(0x01E));
-    Serial.print("OFFSET RANGE (prev, 13):");
+    Serial.print(F("OFFSET RANGE (prev, 13):"));
     Serial.println(range_sensor.readReg(0x024));
-    Serial.print("OFFSET RANGE (prev, 13):");
+    Serial.print(F("OFFSET RANGE (prev, 13):"));
     range_sensor.writeReg(0x024,36);
-    Serial.print("OFFSET RANGE (prev, 13):");
+    Serial.print(F("OFFSET RANGE (prev, 13):"));
     Serial.println(range_sensor.readReg(0x024));
     
     
@@ -452,57 +560,57 @@ void setup()
       //range = range_sensor.readReg(0x064);
       range = range_sensor.readRangeSingleMillimeters();
       
-      Serial.print("RESULT_RANGE_STATUS:");
+      Serial.print(F("RESULT_RANGE_STATUS:"));
       Serial.println(range_sensor.readReg(0x04D));
       avgdist += range;
       avgret += range_sensor.readReg16Bit(0x066);
-      Serial.print("RANGE:");
+      Serial.print(F("RANGE:"));
       Serial.println(range);
-      Serial.print("RETURN RATE:");
+      Serial.print(F("RETURN RATE:"));
       Serial.println(range_sensor.readReg16Bit(0x066));
 
-      if (range_sensor.timeoutOccurred()) { Serial.println(" TIMEOUT"); }
+      if (range_sensor.timeoutOccurred()) { Serial.println(F(" TIMEOUT")); }
     }
     
     avgdist = avgdist/20.0;
-    Serial.println("AVGDIST:");
+    Serial.println(F("AVGDIST:"));
     Serial.println(avgdist);
    
     avgret = avgret/(20.0*128.0);
-    Serial.println("AVGRET:");
+    Serial.println(F("AVGRET:"));
     Serial.println(avgret);
     
     crosstalk = avgret*(1.0 - avgdist/100.0);
-    Serial.print("crosstalk:");
+    Serial.print(F("crosstalk:"));
     Serial.println(crosstalk);
 
-    Serial.print("THR LOW:");
+    Serial.print(F("THR LOW:"));
     Serial.println(range_sensor.readReg(0x01A));
     
 
-    Serial.print("THR HIGH:");
+    Serial.print(F("THR HIGH:"));
     Serial.println(range_sensor.readReg(0x019));
     
 
-    Serial.println("MOTOR_RELAY_TEST");
+    Serial.println(F("MOTOR_RELAY_TEST"));
     digitalWrite(MOTOR_RELAY_PIN,LOW);
     delay(5000);
     digitalWrite(MOTOR_RELAY_PIN,HIGH);
-    Serial.println("HEATER_SSR_TEST");
+    Serial.println(F("HEATER_SSR_TEST"));
     digitalWrite(HEATER_SSR_PIN,HIGH);
     delay(5000);
     digitalWrite(HEATER_SSR_PIN,LOW);
-    Serial.println("LCD_TEST");
+    Serial.println(F("LCD_TEST"));
 
     // does not work : myLcdKeypad->setBackLightOn(false);
     
     myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-    myLcdKeypad->print("ABCDEFGHIJKLMNOP");   // print a Value label on the first line of the display
+    myLcdKeypad->print(F("ABCDEFGHIJKLMNOP"));   // print a Value label on the first line of the display
 
     myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
-    myLcdKeypad->print("ABCDEFGHIJKLMNOP");   // print a Value label on the first line of the display
+    myLcdKeypad->print(F("ABCDEFGHIJKLMNOP"));   // print a Value label on the first line of the display
     //myLcdKeypad->noDisplay();
-    Serial.println("SELF_TEST_END");
+    Serial.println(F("SELF_TEST_END"));
   }
 
 
@@ -513,7 +621,7 @@ void setup()
 
   myLcdKeypad->clear();
   myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-  myLcdKeypad->print("TEMP:");   // print a Value label on the first line of the display
+  myLcdKeypad->print(F("TEMP:"));   // print a Value label on the first line of the display
   myLcdKeypad->setCursor(6, 0);   // position the cursor at beginning of the first line
   myLcdKeypad->print(Input);   // print a Value label on the first line of the display
   delay(2000); 
@@ -557,58 +665,77 @@ void setup()
     
   */
 
- /*
+
+    // initialize ambient temperature based on liquid temperature probe.
+    // Requires that milk is poured AFTER initialization to be effective.
+    // Ideally a separate ambient temperature sensor is required, far from any source of heat.
+
+    sensors.requestTemperatures();
+    ambient_temperature = float(sensors.getTempCByIndex(0));
+
+
+ 
     myLcdKeypad->clear();
     myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-    myLcdKeypad->print("INPUT AMBT TEMP:");   // print a Value label on the first line of the display
+    myLcdKeypad->print(F("INPUT AMBT TEMP:"));   // print a Value label on the first line of the display
+    // change to display temp at init
+    myLcdKeypad->setCursor(0, 1);            // position the cursor at beginning of the second line
+    myLcdKeypad->print(int(floor(ambient_temperature + 0.5f)),DEC);
+    // end change to display temp at init    
 
-    Serial.println("INPUT AMBIENT TEMPERATURE");
+    Serial.println(F("INPUT AMBIENT TEMPERATURE"));
 
     myLcdAdapter->input_ambtemp = true;
     while(myLcdAdapter->input_ambtemp)
     {
+      //delay(100);
+      //Serial.println(readVcc());
       scheduleTimers();  // Get the timer(s) ticked, in particular the LcdKeypad dirver's keyPollTimer
     }
-*/
+
+    //delay(1000);
     myLcdKeypad->clear();
     myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-    myLcdKeypad->print("SELECT PROGRAM:");   // print a Value label on the first line of the display
+    myLcdKeypad->print(F("SELECT PROGRAM:"));   // print a Value label on the first line of the display
     
   
   
-  windowStartTime = millis();
-  windowStartTimeRise = millis();
-
- 
-
-  Serial.println("END SETUP");
+    windowStartTime = millis();
+    windowStartTimeRise = millis();
+    Serial.println(F("END SETUP"));
 }
+
 
 
 void loop() {
 
   static bool pidmode = false;
   // put your main code here, to run repeatedly:
-  scheduleTimers();  // Get the timer(s) ticked, in particular the LcdKeypad dirver's keyPollTimer
   pinMode(HEATER_SSR_PIN, OUTPUT);
   pinMode(MOTOR_RELAY_PIN,OUTPUT);
   
   if (self_test) {return;}
+  
+  while(!myLcdAdapter->program_started)
+  {
+    //Serial.println("PROG START WAIT");
+    scheduleTimers();  // Get the timer(s) ticked, in particular the LcdKeypad dirver's keyPollTimer
+  }
+  
   if (program_ended) 
   {
-    Serial.println("PROGRAM_END");
+    Serial.println(F("PROGRAM_END"));
+    Serial.println(F("BUZZ PROGRAM_END"));
+    buzz(end_program);
     delay(10000);
     return;
   }
 
-  while(!myLcdAdapter->program_started)
-  {
-    scheduleTimers();  // Get the timer(s) ticked, in particular the LcdKeypad dirver's keyPollTimer
-  }
   // program_started = true means the user has selected a program.
   // program_init = false means the selected program needs to be initialized
     
-
+  scheduleTimers();  // Get the timer(s) ticked, in particular the LcdKeypad dirver's keyPollTimer
+  
   /*
   while(program_paused)
   {
@@ -620,17 +747,18 @@ void loop() {
   if(!program_init) 
   {
 
-    Serial.println("SELECTED PROGRAM:");
+    Serial.println(F("SELECTED PROGRAM:"));
     Serial.println(myLcdAdapter->program_number);
-    Serial.println("PROGRAM STEP:");
+    Serial.println(F("PROGRAM STEP:"));
     Serial.println(program_step);
 
     for(k=0;k<4;k++)
     {
-      //current_program_data[k] = pgm_read_word(&(progdata[myLcdAdapter->program_number][k+program_step*4]));
-      // OVERRIDE
-      current_program_data[k] = pgm_read_word(&(progdata[3][k+program_step*4]));
-      Serial.println("READ PROGRAM DATA");
+      current_program_data[k] = pgm_read_word(&(progdata[myLcdAdapter->program_number][k+program_step*4]));
+      
+      // OVERRIDE to program 3 if lcd key pad malfunctions
+      //current_program_data[k] = pgm_read_word(&(progdata[3][k+program_step*4]));
+      Serial.println(F("READ PROGRAM DATA"));
       Serial.println(current_program_data[k]);
     }
 
@@ -644,21 +772,21 @@ void loop() {
         avgdist += range;
         avgret += range_sensor.readReg16Bit(0x066);
         Serial.println(range);
-        //Serial.print("RETURN RATE:");
+        //Serial.print("RETURN RATE:"));
         //Serial.println();
 
-        if (range_sensor.timeoutOccurred()) { Serial.println(" TIMEOUT"); }
+        if (range_sensor.timeoutOccurred()) { Serial.println(" TIMEOUT")); }
       }
       
       avgdist = avgdist/20.0;
-      Serial.println("AVG_DIST:");
+      Serial.println("AVG_DIST:"));
       Serial.println(avgdist);
       liquid_qty_litres = constrain(3.1416*1.375*1.375*(250 - avgdist)/100.0,0,15);
     
     
     */
 
-    if (current_program_data[0] == 0) { stirr_only = true;}
+    if (current_program_data[0] == 0) { stirr_only = true; myLcdAdapter->input_qty = false;}
     
     if ((program_step == 0) && !stirr_only)
     {
@@ -666,11 +794,13 @@ void loop() {
       myLcdAdapter->input_qty = true;
       myLcdKeypad->clear();
       myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-      myLcdKeypad->print("INPUT QTY dL:");   // print a Value label on the first line of the display
+      myLcdKeypad->print(F("INPUT QTY dL:"));   // print a Value label on the first line of the display
 
       while(myLcdAdapter->input_qty)
       {
         scheduleTimers();
+        delay(100);
+        Serial.println(F("wait"));
       }
 
       liquid_qty_litres = (myLcdAdapter->liquid_qty_decilitres)/10.0;
@@ -679,16 +809,16 @@ void loop() {
 
 
     // override
-    liquid_qty_litres = 9.6;
-    ambient_temperature = 20.0;
-    Serial.println("LIQUID_QTY_LITRES:");
+    //liquid_qty_litres = 9.6;
+    //ambient_temperature = 20.0;
+    Serial.println(F("LIQUID_QTY_LITRES:"));
     Serial.println(liquid_qty_litres);
     
     
     //Kp = constrain(52*liquid_qty_litres,10,780);
     //Kp = current_program_data[2];
 
-    Serial.println("kp=");
+    Serial.println(F("kp="));
     Serial.println(Kp);
 
     
@@ -700,9 +830,9 @@ void loop() {
       else { temperature_rise_time = float(current_program_data[1]);}
       stirr_disabled = !bool(current_program_data[2]);
       
-      Serial.println("SETPOINT");
+      Serial.println(F("SETPOINT"));
       Serial.println(Setpoint);
-      Serial.println("TEMP_RISE_TIME");
+      Serial.println(F("TEMP_RISE_TIME"));
       Serial.println(temperature_rise_time);
 
 
@@ -748,22 +878,22 @@ void loop() {
       // hot plate is 1500W max power
       power_required = constrain(power_required,0.0,1500.0);
       
-      if (current_program_data[1] == -1) { open_rise = true; Duty2 = 100; temperature_rise_time = 3600; Serial.println("OPEN_RISE");} //security limit step time for open temperature rise
+      if (current_program_data[1] == -1) { open_rise = true; Duty2 = 100; temperature_rise_time = 3600; Serial.println(F("OPEN_RISE"));} //security limit step time for open temperature rise
       else 
       {
         temperature_rise_time = float(current_program_data[1]);
         Duty2 = constrain(power_required/15.0,0.0,100.0);
       } // restoring the value to get real program step time (maybe tweak was applied in case delta_t < 2.0)
       
-      Serial.print("POWER_REQUIRED:");
+      Serial.print(F("POWER_REQUIRED:"));
       Serial.println(power_required);
       Kp = constrain(fabs(power_required/5.0)/15.0,0.0,100.0)*WindowSize/100.0;
       
-      Serial.print("Duty2:");
+      Serial.print(F("Duty2:"));
       Serial.println(Duty2);
 
       //Duty2 = 100 - Duty;
-      Serial.print("Kp=");
+      Serial.print(F("Kp="));
       Serial.println(Kp);
       myPID.SetTunings(Kp,Ki,Kd);
       //initialize the variables we're linked to
@@ -784,18 +914,20 @@ void loop() {
   
     if (stirr_disabled)
     {
-      Serial.println("STIRR_DISABLED");
+      Serial.println(F("STIRR_DISABLED"));
       digitalWrite(MOTOR_RELAY_PIN,HIGH);
     }
     else
     {
-      Serial.println("STIRR_ENABLED");
+      Serial.println(F("STIRR_ENABLED"));
       digitalWrite(MOTOR_RELAY_PIN,LOW);
     }
     
     
-    Serial.println("STEP_INIT_END");
+    Serial.println(F("STEP_INIT_END"));
     program_init = true;
+    Serial.println(F("BUZZ START PROGRAM"));
+    buzz(start_program);
     programStartTime = millis();
   }
 
@@ -832,7 +964,7 @@ void loop() {
       power_required = constrain(power_required,0.0,1500.0);
     
 
-      if (current_program_data[1] == -1) { open_rise = true; Duty2 = 100.0; temperature_rise_time = 3600; Serial.println("OPEN_RISE");} //security limit step time for open temperature rise
+      if (current_program_data[1] == -1) { open_rise = true; Duty2 = 100.0; temperature_rise_time = 3600; Serial.println(F("OPEN_RISE"));} //security limit step time for open temperature rise
       else 
       {
         temperature_rise_time = float(current_program_data[1]);
@@ -843,7 +975,7 @@ void loop() {
       //Serial.println(power_required);
       Kp = constrain(fabs(power_required/5.0)/15.0,total_heat_loss/15.0,100.0)*WindowSize/100.0;
       myPID.SetSampleTime(5000);
-      Serial.print("SOL:");
+      Serial.print(F("SOL:"));
       Serial.println(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)));
       myPID.SetOutputLimits(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)),WindowSize); 
       myPID.SetTunings(Kp,Ki,Kd);
@@ -891,7 +1023,7 @@ void loop() {
       // print a Value label on the first line of the display
       
       programElapsedTime = (millis() - programStartTime)/1000;
-      Serial.print(" PROGRAM_STEP_ELAPSED_TIME:");
+      Serial.print(F(" PROGRAM_STEP_ELAPSED_TIME:"));
       Serial.println(programElapsedTime);
 
       if (programElapsedTime > temperature_rise_time)
@@ -901,16 +1033,17 @@ void loop() {
         program_step++;
         programElapsedTime = 0;
         program_init = false;
-        Serial.print("NEXT_STEP:");
+        Serial.print(F("NEXT_STEP:"));
         Serial.println(program_step);
         if (current_program_data[3])
         {
           myLcdAdapter->program_paused = true;
+          buzz(end_step);
           myLcdKeypad->clear();
           myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
-          myLcdKeypad->print("PROGRAM PAUSED!");
+          myLcdKeypad->print(F("PROGRAM PAUSED!"));
           myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
-          myLcdKeypad->print("SELECT TO RESUME");
+          myLcdKeypad->print(F("SELECT TO RESUME"));
   
 
           while(myLcdAdapter->program_paused)
@@ -920,24 +1053,29 @@ void loop() {
 
         }
 
-        if (program_step >= 4) {program_ended = true; return;}
+        if (program_step >= 4) 
+        {
+          program_ended = true;
+          buzz(end_program); 
+          return;
+        }
       }
       
       windowStartTime += WindowSize;
       //myLcdKeypad->clear();
 
       //Duty = int(100 *(Output/WindowSize)); 
-      Serial.print("CT:");
+      Serial.print(F("CT:"));
       Serial.print(Input);
-      Serial.print(" TT:");
+      Serial.print(F(" TT:"));
       Serial.print(Setpoint);
-      Serial.print(" D2:");
+      Serial.print(F(" D2:"));
       Serial.print(EffectiveDuty);
-      Serial.print(" SW DT:");
+      Serial.print(F(" SW DT:"));
       Serial.print(constrain(7.0*float(Duty2)*1.6/100.0,4.0,7.0));     
-      Serial.print(" POW REQ:");
+      Serial.print(F(" POW REQ:"));
       Serial.println(power_required);
-      Serial.print(" MODE:");
+      Serial.print(F(" MODE:"));
       Serial.println(myPID.GetMode());
       //Serial.print(" O:");
       //Serial.println(Output);
@@ -969,7 +1107,7 @@ void loop() {
   else
   {
     scheduleTimers();
-    Serial.println("SCHED_TIMERS");
+    Serial.println(F("SCHED_TIMERS"));
     delay(100);
     PrintStatus(0);  // print a Value label on the first line of the display
   } //end else ...(!stirronly)
