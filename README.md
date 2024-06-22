@@ -35,27 +35,27 @@ Making valid measurements requires careful module & cover placement and proper c
 ## TODO
 
 
-Software :
+### Software :
 
--Enable audible power-off warning through Vcc voltage reading
--Make the project Arduino UNO R4 compatible and add wifi telemetry & remote control & remote program definition/inspection
--Show program caption on the Lcd keypad when selecting the program
--Streamline code-bundled program definitions (into FLASH)
--Add the possibility of inputing custom programs through the LCD keypad and store them in the EEPROM.
--Add other kind of liquids support (and their thermodynamic constants)
--Additional temperature measurement code (ambient & motor)
--Rotor lock detection code.
+- Enable audible power-off warning through Vcc voltage reading
+- Make the project Arduino UNO R4 compatible and add wifi telemetry & remote control & remote program definition/inspection
+- Show program caption on the Lcd keypad when selecting the program
+- Streamline code-bundled program definitions (into FLASH)
+- Add the possibility of inputing custom programs through the LCD keypad and store them in the EEPROM.
+- Add other kind of liquids support (and their thermodynamic constants)
+- Additional temperature measurement code (ambient & motor)
+- Rotor lock detection code.
 
--Code cleanup and factorization, reducing RAM footprint with string tables and use of F() as much as possible.
+- Code cleanup and factorization, reducing RAM footprint with string tables and use of F() as much as possible.
 
 
 
-Hardware :
+### Hardware :
 
--Larger capacitor for loss of power detection
--Rotor lock detection (the range finder could be used, or a hall sensor / magnet assembly or variable reluctance sensors)
--For complete motor protection, current sensing could be added.
+- Larger capacitor for loss of power detection
+- Rotor lock detection (the range finder could be used, or a hall sensor / magnet assembly or variable reluctance sensors)
+- For complete motor protection, current sensing could be added.
 
--Two additional temperature sensors : one for ambient temperature and another for AC motor temperature measurement for overheat protection.
--Add cylindrical heatsink on top of AC motor.
--Add curd cutting grates to the stainless steel paddle assembly.
+- Two additional temperature sensors : one for ambient temperature and another for AC motor temperature measurement for overheat protection.
+- Add cylindrical heatsink on top of AC motor.
+- Add curd cutting grates to the stainless steel paddle assembly.
