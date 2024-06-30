@@ -1,4 +1,5 @@
-#define VERSION "1.0.0.22"
+#define VERSION "1.0.0.39"
+#define DEBUGLEVEL 4
 
 #include <Arduino.h>
 #include <OneWire.h>
@@ -108,21 +109,24 @@ double liquid_qty_litres;
 double heat_transfer_rate;
 double ambient_temperature;
 
-const double vessel_radius = 0.1375;
-const double vessel_height = 0.245;
-const double vessel_area = vessel_height*vessel_radius*2*PI;
-const double vessel_thickness = 0.001;
-const double vessel_thermal_conductivity = 25.0;
+const double vessel_radius = 0.1375f;
+const double vessel_height = 0.245f;
+const double vessel_area = vessel_height*vessel_radius*2.f*PI;
+const double vessel_thickness = 0.001f;
+const double vessel_thermal_conductivity = 25.f;
+const double hotplate_max_power = 1500.f;
+const double boost_factor = 1.8f;
+const double vessel_volume_l = vessel_radius*vessel_radius*PI*vessel_height*1000.f;
 
-const double liquid_convective_coefficient_vertical = 12.4; //(milk / steel vessel interface from 50° to 35°)
- const double air_convective_coefficient_vertical = 3.8; //(from ambient temperature at 20°C and metal surface at 35°C)
+const double liquid_convective_coefficient_vertical = 12.4f; //(milk / steel vessel interface from 50° to 35°)
+const double air_convective_coefficient_vertical = 3.8f; //(from ambient temperature at 20°C and metal surface at 35°C)
  
- const double air_convective_coefficient_horizontal = 4.8; //(milk / to air interface from 40° to 30°)
- const double liquid_convective_coefficient_horizontal = 13.6; //( steel bottom to milk interface from 50°C to 35°C)
+ const double air_convective_coefficient_horizontal = 4.8f; //(milk / to air interface from 40° to 30°)
+ const double liquid_convective_coefficient_horizontal = 13.6f; //( steel bottom to milk interface from 50°C to 35°C)
  
- const double milk_thermal_conductivity = 0.622;
- const double milk_heat_capacity = 3970; // J/kg; (hot plate heat capacity estimated at 460 J/kg, not factored in)
- const double milk_density = 1.036; // kg/l
+ const double milk_thermal_conductivity = 0.622f;
+ const double milk_heat_capacity = 3970.f; // J/kg; (hot plate heat capacity estimated at 460 J/kg, not factored in)
+ const double milk_density = 1.036f; // kg/l
 
  double milk_thickness;
  double vertical_surface_U_value;
@@ -159,19 +163,154 @@ double crosstalk;
 // Divide energy by required rise time to get power. 1 output = 1.2W
 // steady state gain : 300 for 5.7l is quite ok
 
-double Kp=300, Ki=20, Kd=-50000;
+double Kp=300.f, Ki=20.f, Kd=-50000.f;
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, P_ON_E, REVERSE);
 
 uint16_t WindowSize = 1000;
 uint16_t WindowSizeRise = 20000;
-float EffectiveDuty = 0.0;
-float Duty2 = 0.0;
+float EffectiveDuty = 0.f;
+float Duty2 = 0.f;
 
 uint32_t windowStartTime;
 uint32_t windowStartTimeRise;
 uint32_t programStartTime;
 uint32_t programElapsedTime;
 uint32_t programSwitchPoint;
+
+
+void dbg(const __FlashStringHelper* fsh , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(fsh);
+  }
+}
+
+void dbg(uint8_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(val);
+  }
+}
+
+void dbg(uint16_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(val);
+  }
+}
+
+
+void dbg(int16_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(val);
+  }
+}
+
+void dbg(int32_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(val);
+  }
+}
+
+
+void dbg(float val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(val);
+  }
+}
+
+
+void dbg(double val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.print(val);
+  }
+}
+
+
+
+void dbgln(const __FlashStringHelper* fsh , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(fsh);
+  }
+}
+
+
+void dbgln(uint8_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
+
+void dbgln(uint16_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
+void dbgln(uint32_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
+
+void dbgln(int16_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
+
+
+void dbgln(int32_t val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
+
+
+void dbgln(float val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
+
+void dbgln(double val , uint8_t debuglevel)
+{
+  if (debuglevel <= DEBUGLEVEL)
+  {
+    Serial.println(val);
+  }
+}
+
 
 
 //bool program_started; // program is running
@@ -208,8 +347,8 @@ public:
     {
       if (LcdKeypad::UP_KEY == newKey)
       {
-        if (self_test) {Serial.println(F("UP")); return;}
-        if (debug) {Serial.println(F("UP"));}
+        if (self_test) {dbgln(F("UP"),1); return;}
+        if (debug) {dbgln(F("UP"),1);}
         if (input_qty) 
         {
           liquid_qty_decilitres++;
@@ -222,7 +361,7 @@ public:
           ambient_temperature = constrain(ambient_temperature,0.0,40.0);
         }
         
-        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,LOW); Serial.println(F("MOTOR_ENABLED")); return;}
+        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,LOW); dbgln(F("MOTOR_ENABLED"),1); return;}
         else
         {
           m_value++;
@@ -233,8 +372,8 @@ public:
       }
       else if (LcdKeypad::DOWN_KEY == newKey)
       {
-        if (self_test) {Serial.println(F("DOWN")); return;}
-        if (debug) {Serial.println(F("DOWN"));}
+        if (self_test) {dbgln(F("DOWN"),1); return;}
+        if (debug) {dbgln(F("DOWN"),1);}
         if (input_qty) 
         {
           liquid_qty_decilitres--;
@@ -247,7 +386,7 @@ public:
           ambient_temperature = constrain(ambient_temperature,0.0,40.0);
         }
         
-        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,HIGH);Serial.println(F("MOTOR_DISABLED")); return;}
+        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,HIGH);dbgln(F("MOTOR_DISABLED"),1); return;}
         else 
         {
           m_value--;
@@ -257,15 +396,15 @@ public:
       }
       else if (LcdKeypad::LEFT_KEY == newKey)
       {
-        if (self_test) {Serial.println(F("LEFT")); return;}
-        if (debug) {Serial.println(F("LEFT"));}
+        if (self_test) {dbgln(F("LEFT"),1); return;}
+        if (debug) {dbgln(F("LEFT"),1);}
         if (program_started) { program_paused = !program_paused;}
   
       }
       else if (LcdKeypad::RIGHT_KEY == newKey)
       {
-        if (self_test) {Serial.println(F("RIGHT")); return;}
-        if (debug) {Serial.println(F("RIGHT"));}
+        if (self_test) {dbgln(F("RIGHT"),1); return;}
+        if (debug) {dbgln(F("RIGHT"),1);}
         if (program_started) { program_step++;}
         
       }
@@ -273,23 +412,23 @@ public:
      
       else if (LcdKeypad::SELECT_KEY == newKey)
       {
-        if (self_test) {Serial.println(F("SELECT")); return;}
-        if (debug) {Serial.println(F("SELECT"));}
+        if (self_test) {dbgln(F("SELECT"),1); return;}
+        if (debug) {dbgln(F("SELECT"),1);}
         if(input_qty) 
         {
-          Serial.println(F("C1"));
+          dbgln(F("C1"),1);
           input_qty = false;
           
         }
         if(!program_started && !input_ambtemp && !input_qty) {
-          Serial.println(F("C3"));
+          dbgln(F("C3"),1);
           program_started = true;
           input_qty = true;
           }
         if(input_ambtemp) 
         {
           input_ambtemp = false; program_started = false;
-          Serial.println(F("C2"));
+          dbgln(F("C2"),1);
         }
 
         if(program_paused) {program_paused = false;}
@@ -324,7 +463,8 @@ public:
 
 MyLcdKeypadAdapter* myLcdAdapter;
 
-long readVcc() {
+long readVcc() 
+{
  
   long result;
   // Read 1.1V reference against AVcc
@@ -336,7 +476,9 @@ long readVcc() {
   result |= ADCH<<8;
   result = 1126400L / result; // Back-calculate AVcc in mV
   return result;
+
 }
+
 
 void PrintStatus(float dt)
 {
@@ -442,6 +584,8 @@ void buzz(state s)
 
 void setup()
 {
+
+  
   pinMode(MOTOR_RELAY_PIN,OUTPUT);
   digitalWrite(MOTOR_RELAY_PIN,HIGH);
   pinMode(HEATER_SSR_PIN, OUTPUT);
@@ -450,9 +594,9 @@ void setup()
 
   Serial.begin(9600);
 
-  Serial.println(F("BUZZ INIT"));
+  dbgln(F("BUZZ INIT"),1);
   buzz(initialization);
-  Serial.println(readVcc());
+  dbgln((int32_t)readVcc(),1);
 
   myLcdKeypad = new LcdKeypad();  // instantiate an object of the LcdKeypad class, using default parameters
   myLcdAdapter = new MyLcdKeypadAdapter(myLcdKeypad);
@@ -483,69 +627,69 @@ void setup()
 
   
 
-  Serial.println(F("START"));
+  dbgln(F("START"),1);
   
   if(self_test)
   {
-    Serial.println(F("SELF_TEST"));
-    Serial.print(F("TEMPERATURE_READ_TEST:"));
+    dbgln(F("SELF_TEST"),1);
+    dbg(F("TEMPERATURE_READ_TEST:"),1);
     sensors.requestTemperatures(); // Send the command to get temperatures
     Input = float(sensors.getTempCByIndex(0));
-    Serial.println(Input);
-    Serial.print(F("RANGE_READ_TEST:"));
+    dbgln(Input,1);
+    dbg(F("RANGE_READ_TEST:"),1);
     //range_sensor.setScaling(1);
 
     
-      Serial.print(F("(Scaling = "));
-      Serial.print(range_sensor.getScaling());
-      Serial.println(F("x "));
+      dbg(F("(Scaling = "),1);
+      dbg(range_sensor.getScaling(),1);
+      dbgln(F("x "),1);
 
-    Serial.print(F("CONV TIME:"));
-    Serial.println(range_sensor.readReg(0x01C));
+    dbg(F("CONV TIME:"),1);
+    dbgln(range_sensor.readReg(0x01C),1);
     range_sensor.writeReg(0x01C,32);
    
-    Serial.print(F("SYSRANGE__RANGE_CHECK_ENABLES_default_16:"));
-    Serial.println(range_sensor.readReg(0x02D));
+    dbg(F("SYSRANGE__RANGE_CHECK_ENABLES_default_16:"),1);
+    dbgln(range_sensor.readReg(0x02D),1);
     
     range_sensor.writeReg(0x02D,19);
-    Serial.print(F("SYSRANGE__RANGE_CHECK_ENABLES_default_16:"));
-    Serial.println(range_sensor.readReg(0x02D));
+    dbg(F("SYSRANGE__RANGE_CHECK_ENABLES_default_16:"),1);
+    dbgln(range_sensor.readReg(0x02D),1);
 
-     Serial.print(F("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:"));
-    Serial.println(range_sensor.readReg(0x025));
+     dbg(F("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:"),1);
+    dbgln(range_sensor.readReg(0x025),1);
     range_sensor.writeReg(0x025,0);
-    Serial.print(F("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:"));
-    Serial.println(range_sensor.readReg(0x025));
+    dbg(F("SYSRANGE__RANGE_IGNORE_VALID_HEIGHT:"),1);
+    dbgln(range_sensor.readReg(0x025),1);
     
 
-    Serial.print(F("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:"));
-    Serial.println(range_sensor.readReg16Bit(0x026));
+    dbg(F("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:"),1);
+    dbgln(range_sensor.readReg16Bit(0x026),1);
     range_sensor.writeReg16Bit(0x026,0);
-    Serial.print(F("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:"));
-    Serial.println(range_sensor.readReg16Bit(0x026));
+    dbg(F("SYSRANGE__RANGE_IGNORE_THRESHOLD_default_0:"),1);
+    dbgln(range_sensor.readReg16Bit(0x026),1);
     
 
     
     // crosstalk 5
-    Serial.print(F("CONV TIME:"));
-    Serial.println(range_sensor.readReg(0x01C));
+    dbg(F("CONV TIME:"),1);
+    dbgln(range_sensor.readReg(0x01C),1);
     
-    Serial.print(F("CROSSTALK COMP:"));
-    Serial.println(range_sensor.readReg16Bit(0x01E));
+    dbg(F("CROSSTALK COMP:"),1);
+    dbgln(range_sensor.readReg16Bit(0x01E),1);
     
     //range_sensor.writeReg(0x01E,0x00);
     //range_sensor.writeReg(0x01F,0x00);
     
   
     range_sensor.writeReg16Bit(0x01E,130);
-    Serial.print(F("CROSSTALK COMP:"));
-    Serial.println(range_sensor.readReg16Bit(0x01E));
-    Serial.print(F("OFFSET RANGE (prev, 13):"));
-    Serial.println(range_sensor.readReg(0x024));
-    Serial.print(F("OFFSET RANGE (prev, 13):"));
+    dbg(F("CROSSTALK COMP:"),1);
+    dbgln(range_sensor.readReg16Bit(0x01E),1);
+    dbg(F("OFFSET RANGE (prev, 13):"),1);
+    dbgln(range_sensor.readReg(0x024),1);
+    dbg(F("OFFSET RANGE (prev, 13):"),1);
     range_sensor.writeReg(0x024,36);
-    Serial.print(F("OFFSET RANGE (prev, 13):"));
-    Serial.println(range_sensor.readReg(0x024));
+    dbg(F("OFFSET RANGE (prev, 13):"),1);
+    dbgln(range_sensor.readReg(0x024),1);
     
     
     
@@ -560,47 +704,47 @@ void setup()
       //range = range_sensor.readReg(0x064);
       range = range_sensor.readRangeSingleMillimeters();
       
-      Serial.print(F("RESULT_RANGE_STATUS:"));
-      Serial.println(range_sensor.readReg(0x04D));
+      dbg(F("RESULT_RANGE_STATUS:"),1);
+      dbgln(range_sensor.readReg(0x04D),1);
       avgdist += range;
       avgret += range_sensor.readReg16Bit(0x066);
-      Serial.print(F("RANGE:"));
-      Serial.println(range);
-      Serial.print(F("RETURN RATE:"));
-      Serial.println(range_sensor.readReg16Bit(0x066));
+      dbg(F("RANGE:"),1);
+      dbgln(range,1);
+      dbg(F("RETURN RATE:"),1);
+      dbgln(range_sensor.readReg16Bit(0x066),1);
 
-      if (range_sensor.timeoutOccurred()) { Serial.println(F(" TIMEOUT")); }
+      if (range_sensor.timeoutOccurred()) { dbgln(F(" TIMEOUT"),1); }
     }
     
     avgdist = avgdist/20.0;
-    Serial.println(F("AVGDIST:"));
-    Serial.println(avgdist);
+    dbgln(F("AVGDIST:"),1);
+    dbgln(avgdist,1);
    
     avgret = avgret/(20.0*128.0);
-    Serial.println(F("AVGRET:"));
-    Serial.println(avgret);
+    dbgln(F("AVGRET:"),1);
+    dbgln(avgret,1);
     
     crosstalk = avgret*(1.0 - avgdist/100.0);
-    Serial.print(F("crosstalk:"));
-    Serial.println(crosstalk);
+    dbg(F("CROSSTALK:"),1);
+    dbgln(crosstalk,1);
 
-    Serial.print(F("THR LOW:"));
-    Serial.println(range_sensor.readReg(0x01A));
+    dbg(F("THR LOW:"),1);
+    dbgln(range_sensor.readReg(0x01A),1);
     
 
-    Serial.print(F("THR HIGH:"));
-    Serial.println(range_sensor.readReg(0x019));
+    dbg(F("THR HIGH:"),1);
+    dbgln(range_sensor.readReg(0x019),1);
     
 
-    Serial.println(F("MOTOR_RELAY_TEST"));
+    dbgln(F("MOTOR_RELAY_TEST"),1);
     digitalWrite(MOTOR_RELAY_PIN,LOW);
     delay(5000);
     digitalWrite(MOTOR_RELAY_PIN,HIGH);
-    Serial.println(F("HEATER_SSR_TEST"));
+    dbgln(F("HEATER_SSR_TEST"),1);
     digitalWrite(HEATER_SSR_PIN,HIGH);
     delay(5000);
     digitalWrite(HEATER_SSR_PIN,LOW);
-    Serial.println(F("LCD_TEST"));
+    dbgln(F("LCD_TEST"),1);
 
     // does not work : myLcdKeypad->setBackLightOn(false);
     
@@ -610,7 +754,7 @@ void setup()
     myLcdKeypad->setCursor(0, 1);   // position the cursor at beginning of the first line
     myLcdKeypad->print(F("ABCDEFGHIJKLMNOP"));   // print a Value label on the first line of the display
     //myLcdKeypad->noDisplay();
-    Serial.println(F("SELF_TEST_END"));
+    dbgln(F("SELF_TEST_END"),1);
   }
 
 
@@ -683,7 +827,7 @@ void setup()
     myLcdKeypad->print(int(floor(ambient_temperature + 0.5f)),DEC);
     // end change to display temp at init    
 
-    Serial.println(F("INPUT AMBIENT TEMPERATURE"));
+    dbgln(F("INPUT AMBIENT TEMPERATURE"),1);
 
     myLcdAdapter->input_ambtemp = true;
     while(myLcdAdapter->input_ambtemp)
@@ -702,7 +846,7 @@ void setup()
   
     windowStartTime = millis();
     windowStartTimeRise = millis();
-    Serial.println(F("END SETUP"));
+    dbgln(F("END SETUP"),1);
 }
 
 
@@ -724,8 +868,8 @@ void loop() {
   
   if (program_ended) 
   {
-    Serial.println(F("PROGRAM_END"));
-    Serial.println(F("BUZZ PROGRAM_END"));
+    dbgln(F("PROGRAM_END"),1);
+    dbgln(F("BUZZ PROGRAM_END"),1);
     buzz(end_program);
     delay(10000);
     return;
@@ -747,10 +891,10 @@ void loop() {
   if(!program_init) 
   {
 
-    Serial.println(F("SELECTED PROGRAM:"));
-    Serial.println(myLcdAdapter->program_number);
-    Serial.println(F("PROGRAM STEP:"));
-    Serial.println(program_step);
+    dbgln(F("SELECTED PROGRAM:"),1);
+    dbgln(myLcdAdapter->program_number,1);
+    dbgln(F("PROGRAM STEP:"),1);
+    dbgln(program_step,1);
 
     for(k=0;k<4;k++)
     {
@@ -758,8 +902,8 @@ void loop() {
       
       // OVERRIDE to program 3 if lcd key pad malfunctions
       //current_program_data[k] = pgm_read_word(&(progdata[3][k+program_step*4]));
-      Serial.println(F("READ PROGRAM DATA"));
-      Serial.println(current_program_data[k]);
+      dbgln(F("READ PROGRAM DATA"),1);
+      dbgln(current_program_data[k],1);
     }
 
 
@@ -800,7 +944,7 @@ void loop() {
       {
         scheduleTimers();
         delay(100);
-        Serial.println(F("wait"));
+        dbgln(F("WAIT"),1);
       }
 
       liquid_qty_litres = (myLcdAdapter->liquid_qty_decilitres)/10.0;
@@ -811,15 +955,15 @@ void loop() {
     // override
     //liquid_qty_litres = 9.6;
     //ambient_temperature = 20.0;
-    Serial.println(F("LIQUID_QTY_LITRES:"));
-    Serial.println(liquid_qty_litres);
+    dbgln(F("LIQUID_QTY_LITRES:"),1);
+    dbgln(liquid_qty_litres,1);
     
     
     //Kp = constrain(52*liquid_qty_litres,10,780);
     //Kp = current_program_data[2];
 
-    Serial.println(F("kp="));
-    Serial.println(Kp);
+    dbgln(F("kp="),1);
+    dbgln(Kp,1);
 
     
     if(!stirr_only)
@@ -830,10 +974,10 @@ void loop() {
       else { temperature_rise_time = float(current_program_data[1]);}
       stirr_disabled = !bool(current_program_data[2]);
       
-      Serial.println(F("SETPOINT"));
-      Serial.println(Setpoint);
-      Serial.println(F("TEMP_RISE_TIME"));
-      Serial.println(temperature_rise_time);
+      dbgln(F("SETPOINT"),1);
+      dbgln(Setpoint,1);
+      dbgln(F("TEMP_RISE_TIME"),1);
+      dbgln(temperature_rise_time,1);
 
 
       //https://www.tlv.com/global/TI/steam-theory/overall-heat-transfer-coefficient.html#:~:text=The%20overall%20heat%20transfer%20coefficient,ft2%C2%B0F)%5D.
@@ -850,8 +994,8 @@ void loop() {
       horizontal_surface_U_value = 1.0/(1.0/liquid_convective_coefficient_horizontal + milk_thickness/milk_thermal_conductivity + 1.0/air_convective_coefficient_horizontal);
       // OPEN LOOP CONTROL when rise time is specified and more than 2 degrees from target
       
-      // added fill factor and its influence on exposed internal vertical steel surface to air.
-      heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (15.0 - liquid_qty_litres)/15.0)*(Input - ambient_temperature);
+      // added fill factor and its influence on exposed internal vertical steel surface to air. // "1 +" accounts for the external wall. 
+      heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (vessel_volume_l - liquid_qty_litres)/vessel_volume_l)*(Input - ambient_temperature);
       
       heat_transfer_rate_horizontal = horizontal_surface_U_value*(PI*vessel_radius*vessel_radius)*(Input - ambient_temperature);
       total_heat_loss = heat_transfer_rate_vertical + heat_transfer_rate_horizontal;
@@ -871,39 +1015,42 @@ void loop() {
           temperature_rise_time = float(current_program_data[1]);
         }
 
-      power_required = 1.80*((total_energy_required/(temperature_rise_time - programElapsedTime)) + total_heat_loss);
+      power_required = boost_factor*((total_energy_required/(temperature_rise_time - programElapsedTime)) + total_heat_loss);
       //power_required = (total_energy_required/temperature_rise_time);
       
-      // 1.8 correction factor.
       // hot plate is 1500W max power
-      power_required = constrain(power_required,0.0,1500.0);
+      power_required = constrain(power_required,0.f,hotplate_max_power);
       
-      if (current_program_data[1] == -1) { open_rise = true; Duty2 = 100; temperature_rise_time = 3600; Serial.println(F("OPEN_RISE"));} //security limit step time for open temperature rise
+      if (current_program_data[1] == -1) 
+      { open_rise = true; 
+        Duty2 = 100; 
+        temperature_rise_time = 3600; //security limit step time for open temperature rise
+        dbgln(F("OPEN_RISE"),1);
+      } 
       else 
       {
         temperature_rise_time = float(current_program_data[1]);
-        Duty2 = constrain(power_required/15.0,0.0,100.0);
+        Duty2 = constrain(100.f*power_required/hotplate_max_power,0.f,100.f);
       } // restoring the value to get real program step time (maybe tweak was applied in case delta_t < 2.0)
       
-      Serial.print(F("POWER_REQUIRED:"));
-      Serial.println(power_required);
-      Kp = constrain(fabs(power_required/5.0)/15.0,0.0,100.0)*WindowSize/100.0;
+      dbg(F("POWER_REQUIRED:"),1);
+      dbgln(power_required,1);
+      Kp = constrain(100.f*(power_required/5.f)/hotplate_max_power,0.f,100.f)*WindowSize/100.f;
       
-      Serial.print(F("Duty2:"));
-      Serial.println(Duty2);
+      dbg(F("Duty2:"),1);
+      dbgln(Duty2,1);
 
       //Duty2 = 100 - Duty;
-      Serial.print(F("Kp="));
-      Serial.println(Kp);
+      dbg(F("Kp="),1);
+      dbgln(Kp,1);
       myPID.SetTunings(Kp,Ki,Kd);
       //initialize the variables we're linked to
   
       //tell the PID to range between 0 and the full window size
-      //myPID.SetOutputLimits(int(WindowSize*0.72), WindowSize);
       myPID.SetOutputLimits(0, WindowSize);
       
       myPID.SetSampleTime(5000);
-      //turn the PID on
+      //PID set to manual (duty not controlled by the PID algorithm)
       myPID.SetMode(MANUAL);
     }
     else // else stirr_only == true 
@@ -914,22 +1061,22 @@ void loop() {
   
     if (stirr_disabled)
     {
-      Serial.println(F("STIRR_DISABLED"));
+      dbgln(F("STIRR_DISABLED"),1);
       digitalWrite(MOTOR_RELAY_PIN,HIGH);
     }
     else
     {
-      Serial.println(F("STIRR_ENABLED"));
+      dbgln(F("STIRR_ENABLED"),1);
       digitalWrite(MOTOR_RELAY_PIN,LOW);
     }
     
     
-    Serial.println(F("STEP_INIT_END"));
+    dbgln(F("STEP_INIT_END"),1);
     program_init = true;
-    Serial.println(F("BUZZ START PROGRAM"));
+    dbgln(F("BUZZ START PROGRAM"),1);
     buzz(start_program);
     programStartTime = millis();
-  }
+  } //end if(!program_init)
 
   
   sensors.requestTemperatures(); // Send the command to get temperatures
@@ -939,7 +1086,7 @@ void loop() {
   if (!stirr_only) 
   {
 
-    heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (15.0 - liquid_qty_litres)/15.0)*(Input - ambient_temperature);
+    heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (vessel_volume_l - liquid_qty_litres)/vessel_volume_l)*(Input - ambient_temperature);
     heat_transfer_rate_horizontal = horizontal_surface_U_value*(PI*vessel_radius*vessel_radius)*(Input - ambient_temperature);
     total_heat_loss = heat_transfer_rate_vertical + heat_transfer_rate_horizontal;
 
@@ -952,6 +1099,8 @@ void loop() {
 
     if (fabs(Setpoint - Input) < constrain(7.0*float(Duty2*1.6)/100.0,4.0,7.0))
     {
+      // closed looop (PID) temperature rise mode when we get close to setpoint. the fine-tune formula
+      // depends also on the open loop calculated Duty2. 7.0, 1.6 4.0 and 7.0 were empirically determined.
 
       if (!pidmode)
       {
@@ -960,23 +1109,29 @@ void loop() {
       }
 
       total_energy_required = liquid_qty_litres*milk_density*milk_heat_capacity*(Setpoint - Input);
-      power_required = 1.80*(total_energy_required/(temperature_rise_time - programSwitchPoint) + total_heat_loss);
-      power_required = constrain(power_required,0.0,1500.0);
+      power_required = boost_factor*(total_energy_required/(temperature_rise_time - programSwitchPoint) + total_heat_loss);
+      power_required = constrain(power_required,0.0,hotplate_max_power);
     
 
-      if (current_program_data[1] == -1) { open_rise = true; Duty2 = 100.0; temperature_rise_time = 3600; Serial.println(F("OPEN_RISE"));} //security limit step time for open temperature rise
+      if (current_program_data[1] == -1) 
+      { 
+        open_rise = true; 
+        Duty2 = 100.0; 
+        temperature_rise_time = 3600; 
+        dbgln(F("OPEN_RISE"),1);
+      } //security limit step time for open temperature rise
       else 
       {
         temperature_rise_time = float(current_program_data[1]);
-        Duty2 = constrain(power_required/15.0,0.0,100.0);
+        Duty2 = constrain(100.f*power_required/hotplate_max_power,0.f,100.f);
       } // restoring the value to get real program step time (maybe tweak was applied in case delta_t < 2.0)
 
       //Serial.print("POWER_REQUIRED:");
       //Serial.println(power_required);
-      Kp = constrain(fabs(power_required/5.0)/15.0,total_heat_loss/15.0,100.0)*WindowSize/100.0;
+      Kp = constrain(100.f*(power_required/5.f)/hotplate_max_power,100.f*total_heat_loss/hotplate_max_power,100.f)*WindowSize/100.f;
       myPID.SetSampleTime(5000);
-      Serial.print(F("SOL:"));
-      Serial.println(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)));
+      dbg(F("SOL:"),1);
+      dbgln(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)),1);
       myPID.SetOutputLimits(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)),WindowSize); 
       myPID.SetTunings(Kp,Ki,Kd);
       myPID.SetMode(AUTOMATIC);
@@ -985,7 +1140,9 @@ void loop() {
       myPID.Compute();
       //Duty = int(100.0*(1.0 - float(Output)/float(WindowSize)));
     }
-    else if(Input - Setpoint > 2.0) // disable heating completely
+    else if(Input - Setpoint > 1.0) 
+    // override - disable heating completely 
+    // as a safety measure in case of temperature overshoot.
     {
       myPID.SetMode(MANUAL);
       power_required = 0.0;
@@ -993,38 +1150,33 @@ void loop() {
       Output = WindowSize;
       pidmode = false;
     }
-    else // controlled rise time mode (open loop)
+    else // open loop temperature rise.
     {
       myPID.SetMode(MANUAL);
       total_energy_required = liquid_qty_litres*milk_density*milk_heat_capacity*(Setpoint - Input);
-      power_required = 1.80*(total_energy_required/(temperature_rise_time - programElapsedTime) + total_heat_loss);
-      power_required = constrain(power_required,0.0,1500.0);
-      Duty2 = constrain(power_required/15.0,0.0,100.0);
+      power_required = boost_factor*(total_energy_required/(temperature_rise_time - programElapsedTime) + total_heat_loss);
+      power_required = constrain(power_required,0.f,hotplate_max_power);
+      Duty2 = constrain(100.f*power_required/hotplate_max_power,0.f,100.f);
       Output = int(float(WindowSize)*float(100.0 - Duty2)/100.0);
+      // we nevertheless set Output so that the same EffectiveDuty formula is used whether PID is manual or auto.
       pidmode = false;  
     }
 
     EffectiveDuty = 100.0*float((WindowSize - Output)/WindowSize);
-/*    
-    if (millis() - windowStartTime > WindowSizeRise)
-    { //time to get temperature rise rate
-    //RiseRate = Input - PreviousInput;
-    //PreviousInput = Input;
-    }
+    // EffectiveDuty is for printing a human readable duty cycle
 
-*/
-    /************************************************
-     * turn the output pin on/off based on pid output
-     ************************************************/
     if (millis() - windowStartTime > WindowSize)
-    { //time to shift the Relay Window
-
+    { 
+      //time to shift the Relay Window
+      windowStartTime += WindowSize; //
+      //windowStartTime = millis(); alternate method - does not take into account processing time
+      
       PrintStatus(EffectiveDuty);
       // print a Value label on the first line of the display
       
       programElapsedTime = (millis() - programStartTime)/1000;
-      Serial.print(F(" PROGRAM_STEP_ELAPSED_TIME:"));
-      Serial.println(programElapsedTime);
+      dbg(F(" PROGRAM_STEP_ELAPSED_TIME:"),1);
+      dbgln(programElapsedTime,1);
 
       if (programElapsedTime > temperature_rise_time)
       {
@@ -1033,10 +1185,12 @@ void loop() {
         program_step++;
         programElapsedTime = 0;
         program_init = false;
-        Serial.print(F("NEXT_STEP:"));
-        Serial.println(program_step);
+        dbg(F("NEXT_STEP:"),1);
+        dbgln(program_step,1);
         if (current_program_data[3])
         {
+          digitalWrite(HEATER_SSR_PIN, LOW); // make sure heat is turned off
+          // program has a pause after step end.
           myLcdAdapter->program_paused = true;
           buzz(end_step);
           myLcdKeypad->clear();
@@ -1055,37 +1209,43 @@ void loop() {
 
         if (program_step >= 4) 
         {
+          digitalWrite(HEATER_SSR_PIN, LOW); // make sure heat is turned off
           program_ended = true;
           buzz(end_program); 
           return;
         }
       }
       
-      windowStartTime += WindowSize;
       //myLcdKeypad->clear();
 
       //Duty = int(100 *(Output/WindowSize)); 
-      Serial.print(F("CT:"));
+      dbg(F("CT:"),1);
       Serial.print(Input);
-      Serial.print(F(" TT:"));
+      dbg(F(" TT:"),1);
       Serial.print(Setpoint);
-      Serial.print(F(" D2:"));
+      dbg(F(" D2:"),1);
       Serial.print(EffectiveDuty);
-      Serial.print(F(" SW DT:"));
+      dbg(F(" SW DT:"),1);
       Serial.print(constrain(7.0*float(Duty2)*1.6/100.0,4.0,7.0));     
-      Serial.print(F(" POW REQ:"));
-      Serial.println(power_required);
-      Serial.print(F(" MODE:"));
-      Serial.println(myPID.GetMode());
+      dbg(F(" POW REQ:"),1);
+      dbgln(power_required,1);
+      dbg(F(" MODE:"),1);
+      dbgln(myPID.GetMode(),1);
       //Serial.print(" O:");
       //Serial.println(Output);
       
 
     }
     
-    //Output = max(0,Output);
-    //if (Output < millis() - windowStartTime) AnalogWrite(RELAY_PIN, HIGH);
-    if (open_rise) { digitalWrite(HEATER_SSR_PIN, HIGH);}
+
+    //************************************************
+    // * turn the output pin on/off based on pid output
+    // ************************************************
+
+    if (open_rise) 
+    { 
+      digitalWrite(HEATER_SSR_PIN, HIGH);
+    }
     else
     {
 
@@ -1107,7 +1267,7 @@ void loop() {
   else
   {
     scheduleTimers();
-    Serial.println(F("SCHED_TIMERS"));
+    dbgln(F("SCHED_TIMERS"),1);
     delay(100);
     PrintStatus(0);  // print a Value label on the first line of the display
   } //end else ...(!stirronly)
