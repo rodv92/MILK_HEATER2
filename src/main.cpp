@@ -1,4 +1,4 @@
-#define VERSION "1.0.0.39"
+#define VERSION "1.0.0.35"
 #define DEBUGLEVEL 4
 
 #include <Arduino.h>
@@ -10,6 +10,7 @@
 #include <LcdKeypad.h>
 
 #include <VL6180X.h>
+#include <avr/wdt.h>
 
 // LCD KEYPAD
 
@@ -32,8 +33,11 @@ bool debug = true;
 bool program_init = false;
 bool program_ended = false;
 //bool program_paused = false;
-bool stirr_only = false;
-bool stirr_disabled = false;
+bool stir_only = false;
+bool stir_disabled = false;
+bool stir_suspend = false;
+uint8_t stir_duty_pct = 100;
+
 bool open_rise = false;
 uint8_t program_step = 0;
 
@@ -41,19 +45,25 @@ String msg_id[3] = {"SELECT_PROGRAM","PROGRAM_END","ADD_RENNET"};
 
 enum state { initialization, start_program, end_step, end_program };
 
-const PROGMEM int16_t progdata[4][16] = 
+const PROGMEM int16_t progdata[5][20] = 
 {
   
 
-  //format_of_array {target_temp,rise_time,stir,pause_after,target_temp2,rise_time2,stir2, etc...}
-  // if target_temperature = -1 then disable heater
+  //format_of_array 
+  // {target_temp,rise_time,stir,pause_after,aural_temp_warn_delta
+  // target_temp2,rise_time2,stir2,pause_after2,aural_temp_warn_delta_2 
+  // etc...}
   
-  // stirr only program :
+  // if rise_time == -1 then open rise (full power)
+  // if target_temperature = -1 then disable heater
+  // if stir !=0 or != 1 and <= 99 then it is intepreted as stir duty cycle in percent     
+  
+  // stir only program :
   // if program is an array of 0 values with 1 for stirring then it will only perform stirring without end.
-  {0,0,1,0,
-  0,0,1,0,
-  0,0,1,0,
-  0,0,1,0} 
+  {0,0,1,0,0,
+  0,0,1,0,0,
+  0,0,1,0,0,
+  0,0,1,0,0} 
   ,
 
   // program fromage suisse type emmental
@@ -66,11 +76,14 @@ const PROGMEM int16_t progdata[4][16] =
 
 //programme calibration 23.12°C à 33.12°C pour 10 litres avec isolation thermique, chauffage à puissance max.
 // temps total 11 min 25 secondes. (68 sec par degré) overshoot jusqu'à 40.13 (soit 7deg pour 100%)
- {33,-1,0,1,
-  0,0,0,0,
-  0,0,0,0,
-  0,0,0,0}
+ {33,-1,0,1,0,
+  0,0,0,0,0,
+  0,0,0,0,0,
+  0,0,0,0,0}
  //fin programme calibration
+
+// TEST 5L of water from 23C to 32C with steering and without insulation : 31.55 after 1200 sec
+// plateau overshoot +0.5C
  ,
  
 //programme mantien temperature
@@ -83,23 +96,35 @@ const PROGMEM int16_t progdata[4][16] =
 */
 
  // programme pasteurisation
- {72,1200,0,0,
-  72,180,1,1,
-  32,2400,1,0,
-  32,2400,1,0}
+ {72,1200,0,0,0,
+  72,180,1,1,0,
+  32,2400,1,0,0,
+  32,2400,1,0,0}
  // fin programme pasteurisation
 
  ,
  
  // programme parmesan
- {32,1200,1,0,
-  32,2400,1,1,
-  37,1200,1,0,
-  51,1600,1,0}
+ {32,1200,1,0,0,
+  32,2400,1,1,0,
+  37,1200,1,0,0,
+  51,1600,1,0,0}
  // fin programme parmesan
 
+ // programme confiture de lait step0 : 1h to 97, stir 10% duty, no pause after, warn 5°C under target
+ // programme confiture de lait step1 : 5h at 99, stir 100% duty, pause after, warn 1°C over target
+,
+ {97,3600,10,0,-5,
+  99,18000,1,1,1,
+  0,0,0,0,0,
+  0,0,0,0,0
+  }
+ // fin programme confiture de lait
+
+ 
+
 };
-int16_t current_program_data[4];
+int16_t current_program_data[5];
 //Define Variables we'll be connecting to
 double Setpoint, Input, Output = 0.0;
 
@@ -166,17 +191,26 @@ double crosstalk;
 double Kp=300.f, Ki=20.f, Kd=-50000.f;
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, P_ON_E, REVERSE);
 
-uint16_t WindowSize = 1000;
-uint16_t WindowSizeRise = 20000;
+uint16_t WindowSizeHeat = 1000; // heater duty period. a larger period reduces thermal stress on the plate, and reduces electrical switching effects
+                                // a shorter period gives more uniform heating and less inertia, making PID work better. Beware SCR switching happens at a multiple of 1/(2*mains_frequency)
+uint16_t WindowSizeStir = 60000; // stir motor duty period. Use a multiples of (60/RPM)/2 to keep the paddles at the same alignment at each turn off
+                                  // duty cycle also has to be a multiple of (60/RPM)/2 and less than WindowSizestir for alignment conservation.
+//uint16_t WindowSizeRise = 20000;
 float EffectiveDuty = 0.f;
 float Duty2 = 0.f;
 
-uint32_t windowStartTime;
-uint32_t windowStartTimeRise;
+uint32_t windowStartTimeHeat;
+uint32_t windowStartTimeStir;
 uint32_t programStartTime;
 uint32_t programElapsedTime;
 uint32_t programSwitchPoint;
 
+void resetFunc() 
+{
+  wdt_disable();
+  wdt_enable(WDTO_15MS); // 15 ms watchdog 
+  while(true); // infinite loop without feeding the dog, should reset in 15ms
+}
 
 void dbg(const __FlashStringHelper* fsh , uint8_t debuglevel)
 {
@@ -361,7 +395,13 @@ public:
           ambient_temperature = constrain(ambient_temperature,0.0,40.0);
         }
         
-        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,LOW); dbgln(F("MOTOR_ENABLED"),1); return;}
+        if ((program_started) && !input_qty && !input_ambtemp) 
+        { 
+          digitalWrite(MOTOR_RELAY_PIN,LOW);
+          stir_suspend = false; 
+          dbgln(F("MOTOR_ENABLED"),1); 
+          return;
+        }
         else
         {
           m_value++;
@@ -386,7 +426,13 @@ public:
           ambient_temperature = constrain(ambient_temperature,0.0,40.0);
         }
         
-        if ((program_started) && !input_qty && !input_ambtemp) { digitalWrite(MOTOR_RELAY_PIN,HIGH);dbgln(F("MOTOR_DISABLED"),1); return;}
+        if ((program_started) && !input_qty && !input_ambtemp) 
+        {
+          digitalWrite(MOTOR_RELAY_PIN,HIGH);
+          stir_suspend = true;
+          dbgln(F("MOTOR_DISABLED"),1); 
+          return;
+        }
         else 
         {
           m_value--;
@@ -844,8 +890,8 @@ void setup()
     
   
   
-    windowStartTime = millis();
-    windowStartTimeRise = millis();
+    windowStartTimeHeat = millis();
+    windowStartTimeStir = windowStartTimeHeat;
     dbgln(F("END SETUP"),1);
 }
 
@@ -866,15 +912,6 @@ void loop() {
     scheduleTimers();  // Get the timer(s) ticked, in particular the LcdKeypad dirver's keyPollTimer
   }
   
-  if (program_ended) 
-  {
-    dbgln(F("PROGRAM_END"),1);
-    dbgln(F("BUZZ PROGRAM_END"),1);
-    buzz(end_program);
-    delay(10000);
-    return;
-  }
-
   // program_started = true means the user has selected a program.
   // program_init = false means the selected program needs to be initialized
     
@@ -896,14 +933,31 @@ void loop() {
     dbgln(F("PROGRAM STEP:"),1);
     dbgln(program_step,1);
 
-    for(k=0;k<4;k++)
+    bool empty_program_step = true;
+
+    for(k=0;k<5;k++)
     {
-      current_program_data[k] = pgm_read_word(&(progdata[myLcdAdapter->program_number][k+program_step*4]));
-      
-      // OVERRIDE to program 3 if lcd key pad malfunctions
-      //current_program_data[k] = pgm_read_word(&(progdata[3][k+program_step*4]));
+      current_program_data[k] = pgm_read_word(&(progdata[myLcdAdapter->program_number][k+program_step*5]));    
+      if (current_program_data[k] != 0) {empty_program_step = false;} // note : if program step is padded with zeros, it means program end.
       dbgln(F("READ PROGRAM DATA"),1);
       dbgln(current_program_data[k],1);
+    }
+
+    if (empty_program_step) 
+    {
+    
+          digitalWrite(HEATER_SSR_PIN, LOW); // make sure heat is turned off
+          digitalWrite(MOTOR_RELAY_PIN,HIGH);
+          program_ended = true;
+          dbgln(F("EMPTY PROGRAM STEP"),1);
+          myLcdKeypad->clear();
+          myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
+          myLcdKeypad->print(F("PROGRAM END"));
+          dbgln(F("BUZZ PROGRAM_END"),1);
+          buzz(end_program);
+          dbgln(F("PROGRAM_END"),1);
+          while(true); // halt processing
+   
     }
 
 
@@ -930,9 +984,9 @@ void loop() {
     
     */
 
-    if (current_program_data[0] == 0) { stirr_only = true; myLcdAdapter->input_qty = false;}
+    if (current_program_data[0] == 0) { stir_only = true; myLcdAdapter->input_qty = false;}
     
-    if ((program_step == 0) && !stirr_only)
+    if ((program_step == 0) && !stir_only)
     {
 
       myLcdAdapter->input_qty = true;
@@ -966,13 +1020,23 @@ void loop() {
     dbgln(Kp,1);
 
     
-    if(!stirr_only)
+    if(!stir_only)
     {
       Setpoint = float(current_program_data[0]); // Degrees Celsius
       
       if ((Setpoint - Input) < 2.0) { temperature_rise_time = 600; } // We don't bother having a controlled rise if it is already close to target, so we can jump to closed loop already}
       else { temperature_rise_time = float(current_program_data[1]);}
-      stirr_disabled = !bool(current_program_data[2]);
+      
+      if(current_program_data[2] > 1)
+      {
+        stir_disabled = false;
+        stir_duty_pct = constrain(current_program_data[2],2,100);
+      }
+      else
+      {
+        stir_disabled = !bool(current_program_data[2]);
+        stir_duty_pct = current_program_data[2]*100;
+      }
       
       dbgln(F("SETPOINT"),1);
       dbgln(Setpoint,1);
@@ -1035,7 +1099,7 @@ void loop() {
       
       dbg(F("POWER_REQUIRED:"),1);
       dbgln(power_required,1);
-      Kp = constrain(100.f*(power_required/5.f)/hotplate_max_power,0.f,100.f)*WindowSize/100.f;
+      Kp = constrain(100.f*(power_required/5.f)/hotplate_max_power,0.f,100.f)*WindowSizeHeat/100.f;
       
       dbg(F("Duty2:"),1);
       dbgln(Duty2,1);
@@ -1047,26 +1111,26 @@ void loop() {
       //initialize the variables we're linked to
   
       //tell the PID to range between 0 and the full window size
-      myPID.SetOutputLimits(0, WindowSize);
+      myPID.SetOutputLimits(0, WindowSizeHeat);
       
       myPID.SetSampleTime(5000);
       //PID set to manual (duty not controlled by the PID algorithm)
       myPID.SetMode(MANUAL);
     }
-    else // else stirr_only == true 
+    else // else stir_only == true 
     {
       PrintStatus(0);  // print a Value label on the first line of the display
     }
   // start stirring;
   
-    if (stirr_disabled)
+    if (stir_disabled)
     {
-      dbgln(F("STIRR_DISABLED"),1);
+      dbgln(F("STIR_DISABLED"),1);
       digitalWrite(MOTOR_RELAY_PIN,HIGH);
     }
     else
     {
-      dbgln(F("STIRR_ENABLED"),1);
+      dbgln(F("STIR_ENABLED"),1);
       digitalWrite(MOTOR_RELAY_PIN,LOW);
     }
     
@@ -1083,7 +1147,7 @@ void loop() {
 
   Input = float(sensors.getTempCByIndex(0));
 
-  if (!stirr_only) 
+  if (!stir_only) 
   {
 
     heat_transfer_rate_vertical =  (vertical_surface_U_value*vessel_area)*(1 + (vessel_volume_l - liquid_qty_litres)/vessel_volume_l)*(Input - ambient_temperature);
@@ -1095,7 +1159,6 @@ void loop() {
     
     // 2.0 correction factor.
     // hot plate is 1500W max power
-     
 
     if (fabs(Setpoint - Input) < constrain(7.0*float(Duty2*1.6)/100.0,4.0,7.0))
     {
@@ -1119,7 +1182,7 @@ void loop() {
         Duty2 = 100.0; 
         temperature_rise_time = 3600; 
         dbgln(F("OPEN_RISE"),1);
-      } //security limit step time for open temperature rise
+      } //security limit step time for open (max_power) temperature rise
       else 
       {
         temperature_rise_time = float(current_program_data[1]);
@@ -1128,18 +1191,18 @@ void loop() {
 
       //Serial.print("POWER_REQUIRED:");
       //Serial.println(power_required);
-      Kp = constrain(100.f*(power_required/5.f)/hotplate_max_power,100.f*total_heat_loss/hotplate_max_power,100.f)*WindowSize/100.f;
+      Kp = constrain(100.f*(power_required/5.f)/hotplate_max_power,100.f*total_heat_loss/hotplate_max_power,100.f)*WindowSizeHeat/100.f;
       myPID.SetSampleTime(5000);
       dbg(F("SOL:"),1);
-      dbgln(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)),1);
-      myPID.SetOutputLimits(WindowSize*(1.0 - constrain(Duty2/100.0,0.0,100.0)),WindowSize); 
+      dbgln(WindowSizeHeat*(1.0 - constrain(Duty2/100.0,0.0,100.0)),1);
+      myPID.SetOutputLimits(WindowSizeHeat*(1.0 - constrain(Duty2/100.0,0.0,100.0)),WindowSizeHeat); 
       myPID.SetTunings(Kp,Ki,Kd);
       myPID.SetMode(AUTOMATIC);
 
 
       myPID.Compute();
-      //Duty = int(100.0*(1.0 - float(Output)/float(WindowSize)));
-    }
+      //Duty = int(100.0*(1.0 - float(Output)/float(WindowSizeHeat)));
+    } // end if ... (closed loop)
     else if(Input - Setpoint > 1.0) 
     // override - disable heating completely 
     // as a safety measure in case of temperature overshoot.
@@ -1147,9 +1210,9 @@ void loop() {
       myPID.SetMode(MANUAL);
       power_required = 0.0;
       Duty2 = 0.0;
-      Output = WindowSize;
+      Output = WindowSizeHeat;
       pidmode = false;
-    }
+    } // end else if(Input - Setpoint > 1.0)
     else // open loop temperature rise.
     {
       myPID.SetMode(MANUAL);
@@ -1157,19 +1220,28 @@ void loop() {
       power_required = boost_factor*(total_energy_required/(temperature_rise_time - programElapsedTime) + total_heat_loss);
       power_required = constrain(power_required,0.f,hotplate_max_power);
       Duty2 = constrain(100.f*power_required/hotplate_max_power,0.f,100.f);
-      Output = int(float(WindowSize)*float(100.0 - Duty2)/100.0);
+      Output = int(float(WindowSizeHeat)*float(100.0 - Duty2)/100.0);
       // we nevertheless set Output so that the same EffectiveDuty formula is used whether PID is manual or auto.
       pidmode = false;  
-    }
+    } // end else open loop temperature rise
 
-    EffectiveDuty = 100.0*float((WindowSize - Output)/WindowSize);
+    EffectiveDuty = 100.0*float((WindowSizeHeat - Output)/WindowSizeHeat);
     // EffectiveDuty is for printing a human readable duty cycle
 
-    if (millis() - windowStartTime > WindowSize)
+    if((stir_duty_pct >= 2 || stir_duty_pct <= 99) & !stir_disabled & !stir_suspend)
+    {
+      if (millis() - windowStartTimeStir > WindowSizeStir)
+      { 
+        //time to shift the stir motor Relay Window
+        windowStartTimeStir = millis(); //alternate method - does not take into account processing time 
+      }
+    }
+    
+    if (millis() - windowStartTimeHeat > WindowSizeHeat)
     { 
-      //time to shift the Relay Window
-      windowStartTime += WindowSize; //
-      //windowStartTime = millis(); alternate method - does not take into account processing time
+      //time to shift the heating SSR Window
+      //windowStartTimeHeat += WindowSizeHeat; //
+      windowStartTimeHeat = millis(); //alternate method - does not take into account processing time
       
       PrintStatus(EffectiveDuty);
       // print a Value label on the first line of the display
@@ -1180,11 +1252,30 @@ void loop() {
 
       if (programElapsedTime > temperature_rise_time)
       {
+        // we reached program step end
+        // ensure heating is cut and stirring is off
         digitalWrite(HEATER_SSR_PIN,LOW);
         digitalWrite(MOTOR_RELAY_PIN,HIGH);
         program_step++;
         programElapsedTime = 0;
         program_init = false;
+
+        if (program_step >= 4) // we reached program end. use watchdog to reset 
+        {
+          digitalWrite(HEATER_SSR_PIN, LOW); // make sure heat is turned off
+          digitalWrite(MOTOR_RELAY_PIN,HIGH);
+          program_ended = true;
+          dbgln(F("LAST PROGRAM STEP END"),1);
+          myLcdKeypad->clear();
+          myLcdKeypad->setCursor(0, 0);   // position the cursor at beginning of the first line
+          myLcdKeypad->print(F("PROGRAM END"));
+          dbgln(F("BUZZ PROGRAM_END"),1);
+          buzz(end_program);
+          dbgln(F("PROGRAM_END"),1);
+          while(true); // halt processing
+        }
+
+
         dbg(F("NEXT_STEP:"),1);
         dbgln(program_step,1);
         if (current_program_data[3])
@@ -1207,26 +1298,19 @@ void loop() {
 
         }
 
-        if (program_step >= 4) 
-        {
-          digitalWrite(HEATER_SSR_PIN, LOW); // make sure heat is turned off
-          program_ended = true;
-          buzz(end_program); 
-          return;
-        }
       }
       
       //myLcdKeypad->clear();
 
-      //Duty = int(100 *(Output/WindowSize)); 
+      //Duty = int(100 *(Output/WindowSizeHeat)); 
       dbg(F("CT:"),1);
-      Serial.print(Input);
+      dbg(Input,1);
       dbg(F(" TT:"),1);
-      Serial.print(Setpoint);
+      dbg(Setpoint,1);
       dbg(F(" D2:"),1);
-      Serial.print(EffectiveDuty);
+      dbg(EffectiveDuty,1);
       dbg(F(" SW DT:"),1);
-      Serial.print(constrain(7.0*float(Duty2)*1.6/100.0,4.0,7.0));     
+      dbg(constrain(7.0*float(Duty2)*1.6/100.0,4.0,7.0),1);     
       dbg(F(" POW REQ:"),1);
       dbgln(power_required,1);
       dbg(F(" MODE:"),1);
@@ -1245,31 +1329,59 @@ void loop() {
     if (open_rise) 
     { 
       digitalWrite(HEATER_SSR_PIN, HIGH);
+      dbg(F("OPEN_RISE_HEAT\n"),5);
     }
     else
     {
 
-      if (Output < millis() - windowStartTime) 
+      if (Output < millis() - windowStartTimeHeat) 
       {
         digitalWrite(HEATER_SSR_PIN, HIGH);
         //delay(5000);
-        //Serial.println("HEAT");
+        dbg(F("HEAT\n"),5);
+        dbg(F("Output Millis windowStartTimeHeat\t"),5);
+        dbg(Output,5);
+        dbg(F("\t"),5);
+        dbg((int32_t) millis(),5);
+        dbg(F("\t"),5);
+        dbg((int32_t) windowStartTimeHeat,5);
+        dbg(F("\n"),5);
+        
+        
+
       }
       else 
       {
         digitalWrite(HEATER_SSR_PIN, LOW);
-        //Serial.println("NO_HEAT");
+        dbg(F("NO_HEAT\n"),5);
       }
 
     } // end else open_rise
-     
-  } // end if(!stirr_only)
+
+    //************************************************
+    // * turn the stirring on/off based on duty cycle configuration
+    // ************************************************
+    if(!stir_suspend)
+    {
+      if (stir_duty_pct*WindowSizeStir/100 < millis() - windowStartTimeStir)
+      {
+          digitalWrite(MOTOR_RELAY_PIN, LOW); // motor enabled
+        
+      }
+      else
+      {
+          digitalWrite(MOTOR_RELAY_PIN,HIGH); // motor disabled
+
+      }
+    }
+
+  } // end if(!stir_only)
   else
   {
     scheduleTimers();
     dbgln(F("SCHED_TIMERS"),1);
     delay(100);
     PrintStatus(0);  // print a Value label on the first line of the display
-  } //end else ...(!stirronly)
+  } //end else ...(!stironly)
 
 }
