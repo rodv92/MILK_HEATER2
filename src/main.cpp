@@ -1,4 +1,4 @@
-#define VERSION "1.0.0.35"
+#define VERSION "1.0.0.36"
 #define DEBUGLEVEL 4
 
 #include <Arduino.h>
@@ -36,7 +36,7 @@ bool program_ended = false;
 bool stir_only = false;
 bool stir_disabled = false;
 bool stir_suspend = false;
-uint8_t stir_duty_pct = 100;
+uint8_t stir_duty_pct = 0;
 
 bool open_rise = false;
 uint8_t program_step = 0;
@@ -397,9 +397,28 @@ public:
         
         if ((program_started) && !input_qty && !input_ambtemp) 
         { 
-          digitalWrite(MOTOR_RELAY_PIN,LOW);
+          if (stir_disabled)
+          {
+            //override command do not allow turn on and force motor off
+            digitalWrite(MOTOR_RELAY_PIN,HIGH);
+            dbgln(F("OVERRIDE MOTOR ENABLE : MOTOR_DISABLED"),1); 
+
+          }
+          else if (stir_duty_pct == 100)
+          {
+            digitalWrite(MOTOR_RELAY_PIN,LOW);
+            dbgln(F("MOTOR_ENABLED"),1); 
+          
+          }
+          else
+          {
+            //time to shift the stir motor Relay Window
+            windowStartTimeStir = millis(); //alternate method - does not take into account processing time 
+            dbgln(F("MOTOR_WILL_RESUME_DUTY"),1); 
+          }
+          // let stirring resume according to duty
+         
           stir_suspend = false; 
-          dbgln(F("MOTOR_ENABLED"),1); 
           return;
         }
         else
@@ -1030,7 +1049,7 @@ void loop() {
       if(current_program_data[2] > 1)
       {
         stir_disabled = false;
-        stir_duty_pct = constrain(current_program_data[2],2,100);
+        stir_duty_pct = constrain(current_program_data[2],2,99);
       }
       else
       {
@@ -1123,15 +1142,19 @@ void loop() {
     }
   // start stirring;
   
-    if (stir_disabled)
+    if (stir_disabled || stir_suspend) 
     {
-      dbgln(F("STIR_DISABLED"),1);
-      digitalWrite(MOTOR_RELAY_PIN,HIGH);
+      dbgln(F("STIR_DISABLED or SUSPENDED"),1);
+      digitalWrite(MOTOR_RELAY_PIN,HIGH); // force motor off
     }
-    else
+    else if (stir_duty_pct == 100)
     {
       dbgln(F("STIR_ENABLED"),1);
       digitalWrite(MOTOR_RELAY_PIN,LOW);
+    }
+    else if (stir_duty_pct >= 2 && stir_duty_pct <=99)
+    {
+      dbgln(F("STIR_ENABLED_DUTY"),1);
     }
     
     
@@ -1228,7 +1251,7 @@ void loop() {
     EffectiveDuty = 100.0*float((WindowSizeHeat - Output)/WindowSizeHeat);
     // EffectiveDuty is for printing a human readable duty cycle
 
-    if((stir_duty_pct >= 2 || stir_duty_pct <= 99) & !stir_disabled & !stir_suspend)
+    if((stir_duty_pct >= 2 && stir_duty_pct <= 99) && !stir_disabled && !stir_suspend)
     {
       if (millis() - windowStartTimeStir > WindowSizeStir)
       { 
@@ -1361,7 +1384,7 @@ void loop() {
     //************************************************
     // * turn the stirring on/off based on duty cycle configuration
     // ************************************************
-    if(!stir_suspend)
+    if  (stir_duty_pct >= 2 && stir_duty_pct <= 99 && !stir_suspend) 
     {
       if (stir_duty_pct*WindowSizeStir/100 < millis() - windowStartTimeStir)
       {
