@@ -1,4 +1,4 @@
-#define VERSION "1.0.0.36"
+#define VERSION "1.0.0.56"
 #define DEBUGLEVEL 4
 
 #include <Arduino.h>
@@ -43,7 +43,7 @@ uint8_t program_step = 0;
 
 String msg_id[3] = {"SELECT_PROGRAM","PROGRAM_END","ADD_RENNET"};
 
-enum state { initialization, start_program, end_step, end_program };
+enum state { initialization, start_program, end_step, end_program, warn_temp };
 
 const PROGMEM int16_t progdata[5][20] = 
 {
@@ -114,7 +114,7 @@ const PROGMEM int16_t progdata[5][20] =
  // programme confiture de lait step0 : 1h to 97, stir 10% duty, no pause after, warn 5°C under target
  // programme confiture de lait step1 : 5h at 99, stir 100% duty, pause after, warn 1°C over target
 ,
- {97,3600,10,0,-5,
+ {97,6000,10,0,-5,
   99,18000,1,1,1,
   0,0,0,0,0,
   0,0,0,0,0
@@ -126,7 +126,7 @@ const PROGMEM int16_t progdata[5][20] =
 };
 int16_t current_program_data[5];
 //Define Variables we'll be connecting to
-double Setpoint, Input, Output = 0.0;
+double Setpoint, Input, Output, WarnTemp = 0.0;
 
 
 // Units S.I
@@ -193,7 +193,7 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, P_ON_E, REVERSE);
 
 uint16_t WindowSizeHeat = 1000; // heater duty period. a larger period reduces thermal stress on the plate, and reduces electrical switching effects
                                 // a shorter period gives more uniform heating and less inertia, making PID work better. Beware SCR switching happens at a multiple of 1/(2*mains_frequency)
-uint16_t WindowSizeStir = 60000; // stir motor duty period. Use a multiples of (60/RPM)/2 to keep the paddles at the same alignment at each turn off
+uint32_t WindowSizeStir = 60000; // stir motor duty period. Use a multiples of (60/RPM)/2 to keep the paddles at the same alignment at each turn off
                                   // duty cycle also has to be a multiple of (60/RPM)/2 and less than WindowSizestir for alignment conservation.
 //uint16_t WindowSizeRise = 20000;
 float EffectiveDuty = 0.f;
@@ -366,7 +366,7 @@ public:
   MyLcdKeypadAdapter(LcdKeypad* lcdKeypad)
   : m_lcdKeypad(lcdKeypad)
   , m_value(0)
-  , program_number(1)
+  , program_number(0)
   , program_paused(false)
   , program_started(false)
   , liquid_qty_decilitres(50)
@@ -412,6 +412,7 @@ public:
           }
           else
           {
+            dbgln(F("BEFORE REENABLE STIR"),1);
             //time to shift the stir motor Relay Window
             windowStartTimeStir = millis(); //alternate method - does not take into account processing time 
             dbgln(F("MOTOR_WILL_RESUME_DUTY"),1); 
@@ -424,7 +425,7 @@ public:
         else
         {
           m_value++;
-          m_value = constrain(m_value,0,3);
+          m_value = constrain(m_value,0,4);
           program_number = m_value;
         }
         
@@ -455,7 +456,7 @@ public:
         else 
         {
           m_value--;
-          m_value = constrain(m_value,0,3);
+          m_value = constrain(m_value,0,4);
           program_number = m_value;
         }
       }
@@ -470,7 +471,7 @@ public:
       {
         if (self_test) {dbgln(F("RIGHT"),1); return;}
         if (debug) {dbgln(F("RIGHT"),1);}
-        if (program_started) { program_step++;}
+        if (program_started) { program_step++;program_init=false;return;}
         
       }
   
@@ -642,6 +643,19 @@ void buzz(state s)
       }
       break;
 
+      case warn_temp:
+
+      for(uint16_t i=0; i < freq/20; i++)
+      {
+        //Serial.println("buzz"); // buzz at 0.25 PWM
+        digitalWrite(BUZZER_PIN,LOW);
+        delayMicroseconds(half_period_us*1.5f);
+        digitalWrite(BUZZER_PIN,HIGH);
+        delayMicroseconds(half_period_us/2);
+      }
+      break;
+
+
   }
 }
 
@@ -651,6 +665,7 @@ void setup()
 {
 
   
+  wdt_disable();
   pinMode(MOTOR_RELAY_PIN,OUTPUT);
   digitalWrite(MOTOR_RELAY_PIN,HIGH);
   pinMode(HEATER_SSR_PIN, OUTPUT);
@@ -1042,6 +1057,7 @@ void loop() {
     if(!stir_only)
     {
       Setpoint = float(current_program_data[0]); // Degrees Celsius
+      WarnTemp = float(Setpoint + current_program_data[4]); // Degrees Celsius Warning Temperature
       
       if ((Setpoint - Input) < 2.0) { temperature_rise_time = 600; } // We don't bother having a controlled rise if it is already close to target, so we can jump to closed loop already}
       else { temperature_rise_time = float(current_program_data[1]);}
@@ -1138,6 +1154,8 @@ void loop() {
     }
     else // else stir_only == true 
     {
+      stir_disabled = false;
+      stir_duty_pct = 100;
       PrintStatus(0);  // print a Value label on the first line of the display
     }
   // start stirring;
@@ -1253,10 +1271,12 @@ void loop() {
 
     if((stir_duty_pct >= 2 && stir_duty_pct <= 99) && !stir_disabled && !stir_suspend)
     {
-      if (millis() - windowStartTimeStir > WindowSizeStir)
+      if ((millis() - windowStartTimeStir) > WindowSizeStir)
       { 
         //time to shift the stir motor Relay Window
-        windowStartTimeStir = millis(); //alternate method - does not take into account processing time 
+        windowStartTimeStir = millis(); //alternate method - does not take into account processing time
+        dbg(F("STIR WINDOW SHIFT\n"),1);
+ 
       }
     }
     
@@ -1270,8 +1290,16 @@ void loop() {
       // print a Value label on the first line of the display
       
       programElapsedTime = (millis() - programStartTime)/1000;
-      dbg(F(" PROGRAM_STEP_ELAPSED_TIME:"),1);
+      dbg(F("PROGRAM_STEP_ELAPSED_TIME:"),1);
       dbgln(programElapsedTime,1);
+
+      if (Input > WarnTemp)
+
+      {
+        buzz(warn_temp);
+        dbg(F("WARN TEMP\n"),1);
+ 
+      }      
 
       if (programElapsedTime > temperature_rise_time)
       {
@@ -1386,15 +1414,32 @@ void loop() {
     // ************************************************
     if  (stir_duty_pct >= 2 && stir_duty_pct <= 99 && !stir_suspend) 
     {
-      if (stir_duty_pct*WindowSizeStir/100 < millis() - windowStartTimeStir)
+      if (double(stir_duty_pct*WindowSizeStir)/100.f > double(millis() - windowStartTimeStir))
       {
           digitalWrite(MOTOR_RELAY_PIN, LOW); // motor enabled
+/*
+          dbg(F("STIR_DUTY_PCT\n"),1);
+          dbgln(double(stir_duty_pct) ,1);
+          
+
+          dbg(F("WINDOW_SIZE_STIR\n"),1);
+          dbgln(double(WindowSizeStir) ,1);
+          
+
+          dbg(F("STIR_EXP\n"),1);
+          dbgln(double(stir_duty_pct*WindowSizeStir)/100.f ,1);
+          
+
+          dbg(F("STIR_WINDOW_POS\n"),1);
+          dbgln(double(millis() - windowStartTimeStir),1);
+*/          
         
       }
       else
       {
           digitalWrite(MOTOR_RELAY_PIN,HIGH); // motor disabled
-
+          dbg(F("NO_STIR\n"),1);
+          
       }
     }
 
